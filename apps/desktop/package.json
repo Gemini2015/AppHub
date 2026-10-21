@@ -14,14 +14,15 @@
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
     "test:e2e": "playwright test -c e2e/playwright.config.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.renderer.json"
   },
   "dependencies": {
     "@apphub/core": "workspace:*",
     "@apphub/protocol": "workspace:*",
     "@apphub/storage": "workspace:*",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@apphub/testkit": "workspace:*",

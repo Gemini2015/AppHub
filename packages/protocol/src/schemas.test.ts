@@ -25,7 +25,14 @@ import type {
 
 const CHANNEL_ID = 'ch_0123456789abcdef0123';
 
-export function makeFilesFile(overrides: Partial<FilesFile> = {}): FilesFile {
+/** 测试 fixture 的深部分类型：允许外层字段与嵌套对象字段只写一部分（用于测试默认值填充）。 */
+type DeepPartial<T> = T extends readonly (infer U)[]
+  ? U[]
+  : T extends object
+    ? { [K in keyof T]?: DeepPartial<T[K]> }
+    : T;
+
+export function makeFilesFile(overrides: DeepPartial<FilesFile> = {}): FilesFile {
   const files = [
     { path: 'foobar.exe', size: 11, md5: '0123456789abcdef0123456789abcdef' },
     { path: 'resources/data.txt', size: 5, md5: '0123456789abcdef0123456789abcdef' },
@@ -44,10 +51,10 @@ export function makeFilesFile(overrides: Partial<FilesFile> = {}): FilesFile {
     files,
     generatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
-  };
+  } as FilesFile;
 }
 
-export function makeAppMeta(overrides: Partial<AppMetaFile> = {}): AppMetaFile {
+export function makeAppMeta(overrides: DeepPartial<AppMetaFile> = {}): AppMetaFile {
   const files = makeFilesFile().files;
   return {
     schemaVersion: 1,
@@ -79,10 +86,10 @@ export function makeAppMeta(overrides: Partial<AppMetaFile> = {}): AppMetaFile {
     ],
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
-  };
+  } as AppMetaFile;
 }
 
-export function makeChannel(overrides: Partial<ChannelFile> = {}): ChannelFile {
+export function makeChannel(overrides: DeepPartial<ChannelFile> = {}): ChannelFile {
   const meta = makeAppMeta();
   return {
     schemaVersion: 1,
@@ -110,7 +117,7 @@ export function makeChannel(overrides: Partial<ChannelFile> = {}): ChannelFile {
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
-  };
+  } as ChannelFile;
 }
 
 export const ftpStorage: FtpHttpStorageConfig = {
@@ -128,7 +135,7 @@ export const ftpStorage: FtpHttpStorageConfig = {
   http: { baseUrl: 'http://127.0.0.1:8080/app_repo/' },
 };
 
-export function makeChannelPrivate(overrides: Partial<ChannelPrivateFile> = {}): ChannelPrivateFile {
+export function makeChannelPrivate(overrides: DeepPartial<ChannelPrivateFile> = {}): ChannelPrivateFile {
   return {
     schemaVersion: 1,
     kind: 'apphub-channel-private',
@@ -141,7 +148,7 @@ export function makeChannelPrivate(overrides: Partial<ChannelPrivateFile> = {}):
     owner: { name: 'Owner' },
     admins: [],
     ...overrides,
-  };
+  } as ChannelPrivateFile;
 }
 
 describe('channel.json', () => {

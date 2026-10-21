@@ -75,6 +75,9 @@ export async function startStaticServer(rootDir: string): Promise<StaticServer> 
     requests,
     close: () =>
       new Promise<void>((resolve, reject) => {
+        // fetch/undici 会保持 keep-alive 连接，不主动断开会让 server.close 等到连接空闲超时。
+        server.closeIdleConnections?.();
+        server.closeAllConnections?.();
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };
