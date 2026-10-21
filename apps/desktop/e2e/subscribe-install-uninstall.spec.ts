@@ -64,11 +64,17 @@ test.describe('公开频道：订阅 → 安装 → 校验 → 卸载', () => {
       `/library/${fixture.channelId}/${fixture.appId}/versions/${fixture.appVersion}`,
     );
 
-    // 5) 本地库页 → 校验按钮
+    // 5) 本地库页 → 检查更新（预置频道只有一个版本，应提示已是最新）+ 校验按钮
     await openLibrary(window);
     await expect(window.getByTestId(TESTID.libraryPage)).toBeVisible();
     const installedCard = installedAppCard(window, fixture.appId);
     await expect(installedCard).toBeVisible();
+
+    await window.getByTestId(TESTID.libraryCheckUpdates).click();
+    await expect(window.getByText(/都已是最新|发现 0 个|最新版本/).first()).toBeVisible({
+      timeout: TIMEOUTS.op,
+    });
+
     // LibraryView 的卡片操作按钮没有独立 testid（只有 card 容器有），按可访问名定位
     await installedCard.getByRole('button', { name: '校验' }).click();
     const verifyResult = window.getByTestId('verify-result');

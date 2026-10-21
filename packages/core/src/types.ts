@@ -171,7 +171,12 @@ export interface PublishFileInput {
 
 export interface PublishAppInput {
   channelId: string;
-  /** 创建新 App 时填写；已存在时忽略并使用 name。 */
+  /**
+   * App 身份与展示信息。
+   * - 创建新 App：提供 displayName（appId 可选，缺省由 displayName 生成）；
+   * - 发布已有 App 的新版本：必须提供 appId（用于定位远端 app.meta.json），
+   *   displayName 等展示字段会被远端已有信息覆盖。
+   */
   app?: {
     appId?: string;
     displayName: string;

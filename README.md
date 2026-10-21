@@ -84,10 +84,26 @@ pnpm start          # 构建并以生产模式启动
 pnpm package        # 用 electron-builder 打包（--dir 产物在 apps/desktop/release）
 pnpm test           # 全部单元/集成测试（离线，进程内模拟 FTP/nginx/S3）
 pnpm typecheck      # 所有包 TypeScript 严格检查
+pnpm verify         # 一键验收：全部 test + typecheck + desktop build
+pnpm verify:e2e     # 一键验收（含真实 Electron Playwright E2E，14 步）
 pnpm demo           # 无需 GUI 的全链路演示：创建频道→发布→订阅→安装→更新
 ```
 
 > 开发/测试环境使用 `APPHUB_USER_DATA_DIR` 可以指定独立数据目录，便于多实例与 E2E 测试。
+
+## 验收结果（本机实测，2026-10-21）
+
+| 项目 | 结果 |
+| --- | --- |
+| `pnpm verify:e2e`（6 包 test + 6 包 typecheck + build + E2E） | **14/14 步通过，PASS，49.5s** |
+| Vitest 单元/集成测试 | **350 个用例，0 skipped**（protocol 24 / storage 39 / core 90 / 集成 30 / desktop 167） |
+| Electron E2E（Playwright + 真实 Electron） | **6/6 通过**（启动、订阅→安装→校验→卸载、错误处理、创建/发布向导） |
+| `@apphub/core` 覆盖率（v8） | statements 86.1% / branches 76.6% / functions 91.1% |
+| `pnpm demo`（真实进程内 FTP + 静态 HTTP，模拟 ftp+nginx） | 创建频道 → files 发布 1.0.0/1.0.1/1.0.2 → 订阅 → 安装 → 差量更新 → zip App 安装 → 卸载 全部通过 |
+| `pnpm package`（electron-builder --dir） | `apps/desktop/release/win-unpacked/AppHub.exe` 生成成功 |
+| 环境 | Windows / Node 22.23 / pnpm 11.22 / Electron 38.8 / 完全离线 |
+
+> 测试分层、需求覆盖矩阵（R1–R47）、手工验收清单（M1–M20，需要真实 ftp+nginx/MinIO/三平台实机）与 CI 配置见 [docs/TESTING.md](./docs/TESTING.md)。
 
 ## 使用指南
 

@@ -99,6 +99,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<RunningApp
 
   const appDir = options.appDir ?? DESKTOP_DIR;
   const mainLogs: string[] = [];
+  // Linux CI（root 用户 / 无 user namespace）常需要 --no-sandbox；通过环境变量传入，避免改代码
+  const envExtraArgs = (process.env.APPHUB_E2E_ELECTRON_ARGS ?? '')
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
   const env = buildElectronEnv({
     APPHUB_USER_DATA_DIR: userDataDir,
     ...options.extraEnv,
@@ -106,7 +111,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<RunningApp
 
   const app = await electron.launch({
     executablePath: resolveElectronExecutable(),
-    args: [appDir, ...(options.extraArgs ?? [])],
+    args: [appDir, ...envExtraArgs, ...(options.extraArgs ?? [])],
     env,
     timeout: 60_000,
   });

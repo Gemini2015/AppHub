@@ -249,9 +249,11 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 
 ## 9. 交付验收清单
 
-- [ ] `pnpm install && pnpm typecheck && pnpm test` 全部通过；
-- [ ] `pnpm build` 产出 `out/`，`pnpm dev` 可启动应用；`pnpm package` 产出可运行目录（Windows）；
-- [ ] 演示脚本 `pnpm demo` 可在本地完成 FTP+nginx 模拟环境下的创建/发布/订阅/安装/更新；
-- [ ] README 的 Quickstart 与截图/步骤一致；
-- [ ] 需求中的每一条功能都能在 UI 或 API 中找到对应实现；
-- [ ] docs/PROTOCOL.md、STORAGE.md、TESTING.md 完整。
+- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（350 个 Vitest 用例，0 skipped）；
+- [x] `pnpm build` 产出 `out/`，`pnpm dev` 可启动应用；`pnpm package` 产出 `apps/desktop/release/win-unpacked/AppHub.exe`；
+- [x] 演示脚本 `pnpm demo` 在 FTP+nginx 模拟环境下完成创建/发布/订阅/安装/更新/zip/卸载；
+- [x] README 的 Quickstart 与截图一致；
+- [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5）；
+- [x] docs/PROTOCOL.md、STORAGE.md、TESTING.md 完整；
+- [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 6/6）。
+
