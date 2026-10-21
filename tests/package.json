@@ -1,0 +1,23 @@
+{
+  "name": "@apphub/tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AppHub cross-package integration tests",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@apphub/core": "workspace:*",
+    "@apphub/protocol": "workspace:*",
+    "@apphub/storage": "workspace:*"
+  },
+  "devDependencies": {
+    "@apphub/testkit": "workspace:*",
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

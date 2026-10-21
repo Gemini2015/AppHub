@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["shared/**/*.ts", "src/main/**/*.ts", "src/preload/**/*.ts"]
+}

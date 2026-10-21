@@ -1,0 +1,28 @@
+{
+  "name": "apphub-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AppHub - 去中心化的 App 分享、订阅与本地管理工具",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @apphub/desktop dev",
+    "start": "pnpm --filter @apphub/desktop start",
+    "build": "pnpm --filter @apphub/desktop build",
+    "package": "pnpm --filter @apphub/desktop package",
+    "test": "pnpm -r --no-bail run test",
+    "test:e2e": "pnpm --filter @apphub/desktop test:e2e",
+    "typecheck": "pnpm -r --no-bail run typecheck",
+    "demo": "tsx scripts/demo.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^22.20.5",
+    "cross-env": "^7.0.3",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

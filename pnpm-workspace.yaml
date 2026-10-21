@@ -1,0 +1,11 @@
+packages:
+  - packages/*
+  - apps/*
+  - tests
+
+# pnpm 11 blocks lifecycle scripts by default; allow the required toolchain scripts.
+allowBuilds:
+  dtrace-provider: true
+  electron: true
+  electron-winstaller: true
+  esbuild: true
