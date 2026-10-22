@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "AppHub desktop application (Electron + React)",
+  "author": "AppHub Contributors",
   "main": "out/main/index.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -46,26 +47,31 @@
   "build": {
     "appId": "dev.apphub.desktop",
     "productName": "AppHub",
+    "copyright": "Copyright © 2026 AppHub Contributors",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "out/**/*",
       "package.json"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis",
         "portable"
       ]
     },
     "linux": {
+      "icon": "build/icon.png",
       "target": [
         "AppImage"
       ],
       "category": "Utility"
     },
     "mac": {
+      "icon": "build/icon.icns",
       "target": [
         "dmg"
       ],

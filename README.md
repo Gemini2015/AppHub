@@ -183,6 +183,10 @@ pnpm test:e2e                 # Electron E2E（需先 build）
 
 测试完全离线：集成测试在进程内启动 FTP 服务器（ftp-srv）、静态 HTTP 服务器、S3 服务器（s3rver），真实地走存储协议，不依赖外网或真实服务器。测试策略与手工验收清单见 [docs/TESTING.md](./docs/TESTING.md)。
 
+CI：GitHub Actions（Windows + Linux/xvfb）配置在 [`.github/workflows/verify.yml`](.github/workflows/verify.yml)，执行 `pnpm verify:e2e` 并上传 E2E 报告。
+
+应用图标由 `scripts/generate-icons.py` 生成（Pillow），产物（`icon.png` / `icon.ico` / `icon.icns`）位于 `apps/desktop/build/`，electron-builder 打包时自动使用。
+
 ## 项目结构
 
 ```
@@ -197,10 +201,13 @@ AppHub/
 │   ├── src/main/   Electron 主进程（IPC、文件选择、安全、启动本地 App、加密凭据）
 │   ├── src/preload/ contextBridge API
 │   ├── src/renderer/ React UI
+│   ├── build/      应用图标（png/ico/icns，由 scripts/generate-icons.py 生成）
 │   └── e2e/        Playwright Electron E2E
 ├── tests/          跨包集成测试
 ├── docs/           架构/协议/存储/测试文档
-└── scripts/        demo 与验收脚本
+├── scripts/        demo / 图标生成 / 一键验收脚本
+├── .github/workflows/ CI（Windows + Linux xvfb，pnpm verify:e2e）
+└── LICENSE         MIT
 ```
 
 ## 安全说明
@@ -221,4 +228,4 @@ AppHub/
 
 ## License
 
-MIT
+MIT，见 [LICENSE](LICENSE)。

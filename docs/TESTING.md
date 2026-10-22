@@ -481,6 +481,7 @@ jobs:
 
 说明：
 
+- 仓库已提交实际工作流 [`.github/workflows/verify.yml`](../.github/workflows/verify.yml)，内容与上例一致（Windows + Linux/xvfb 两个 job，跑 `pnpm verify:e2e` 并上传 E2E 报告）；
 - 不需要 `playwright install`（Electron 自带 Chromium）；
 - 若 CI 环境预置了 `ELECTRON_RUN_AS_NODE`，verify.mjs / E2E helper 会自动清理；
 - macOS runner 可跑同一套命令（`pnpm verify:e2e`，无需 xvfb）。

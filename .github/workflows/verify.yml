@@ -1,0 +1,83 @@
+name: verify
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: verify (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 全部包 test + typecheck + desktop build + 真实 Electron E2E
+      - name: Verify (tests + typecheck + build + e2e)
+        run: pnpm verify:e2e
+
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report-windows
+          path: apps/desktop/e2e/.tmp
+          retention-days: 7
+          if-no-files-found: ignore
+
+  linux:
+    name: verify (Linux, xvfb)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Electron/Chromium runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Electron 无头运行需要 xvfb；root/容器环境需要 --no-sandbox
+      - name: Verify (tests + typecheck + build + e2e)
+        run: xvfb-run -a pnpm verify:e2e
+        env:
+          APPHUB_E2E_ELECTRON_ARGS: --no-sandbox
+
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report-linux
+          path: apps/desktop/e2e/.tmp
+          retention-days: 7
+          if-no-files-found: ignore
