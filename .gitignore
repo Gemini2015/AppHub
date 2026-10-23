@@ -23,6 +23,24 @@ pnpm-debug.log*
 .env
 .env.*
 
+# secrets / credentials —— 永远不要提交到仓库
+.npmrc
+auth.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.secret
+secrets/
+# 频道私密配置（含 FTP/S3 凭据）：只应保存在本地或私下分享
+channel_pri.json
+*.channel_pri.json
+# 本机导出/演示数据
+data/
+user-data/
+
 # editors / os
 .DS_Store
 Thumbs.db

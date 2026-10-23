@@ -18,7 +18,7 @@
  *   CI=1                      CI 下禁用颜色 + 默认启用 bail
  *
  * 注意：本脚本会从子进程环境中删除 ELECTRON_RUN_AS_NODE。
- * 某些宿主（DSH Desktop、部分 CI runner）会注入该变量，导致 Electron 退化为
+ * 某些桌面宿主环境或 CI runner 会注入该变量，导致 Electron 退化为
  * 纯 Node 运行，E2E 会以 "Process failed to launch!" 失败。
  */
 

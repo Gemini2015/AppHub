@@ -364,7 +364,7 @@ repo/
 
 - `_electron.launch({ executablePath: require('electron'), args: [apps/desktop] })`；
 - 每个用例独立 `APPHUB_USER_DATA_DIR`（`e2e/.tmp/user-data/run-*`），结束后删除；
-- **关键坑**：宿主环境可能注入 `ELECTRON_RUN_AS_NODE=1`（本仓库的 DSH Desktop 宿主就会），
+- **关键坑**：某些桌面宿主环境或 CI runner 会在子进程中注入 `ELECTRON_RUN_AS_NODE=1`，
   被 Electron 继承后 `electron.exe` 退化为纯 Node，表现为 `Process failed to launch!`。
   启动 helper 会从子进程 env 中 `delete` 该变量（以及 `ELECTRON_NO_ATTACH_CONSOLE`）；
 - 首窗失败时把主进程 stdout/stderr 一起抛出，并提示检查 build 产物/单实例锁；

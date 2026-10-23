@@ -14,7 +14,7 @@ import {
  * 启动/关闭 Electron 应用。
  *
  * 关键环境事实（踩过的坑，务必保留）：
- *  - 某些宿主环境（如本仓库的 DSH Desktop 宿主、部分 CI runner）会导出
+ *  - 某些桌面宿主环境或 CI runner 会导出
  *    `ELECTRON_RUN_AS_NODE=1`，被 Electron 继承后 `electron.exe` 会以纯 Node 运行，
  *    `require('electron')` 返回的不是 Electron API，`_electron.launch` 会直接
  *    “Process failed to launch!” 而没有任何窗口。这里在子进程 env 中强制删除该变量。

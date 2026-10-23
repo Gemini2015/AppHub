@@ -217,6 +217,7 @@ AppHub/
 - 下载仅允许 http(s)，zip 解压做 zip-slip / 符号链接 / 大小上限防护；安装采用 staging + 校验 + 原子切换；
 - 发布/更新完整性按需求使用 **size + MD5** 校验；MD5 用于检测传输损坏/错版本，不提供防篡改能力，生产环境请使用 HTTPS 并只订阅可信频道；
 - 私密频道的安全性基于能力链接（可选的 nginx Basic Auth 可进一步加强）；发布权限基于 `channel_pri.json` 的持有。
+- **公开仓库注意**：`.gitignore` 已忽略 `.env*`、`channel_pri.json`、`.npmrc`、`*.pem/*.key/*.p12` 等敏感文件；请勿把 `channel_pri.json`（含 FTP/S3 凭据）、用户数据目录或本机导出文件提交到公开仓库。若凭据曾误提交，应立即轮换。
 
 ## 路线图
 
