@@ -137,22 +137,28 @@ channel.json                                  # 公开频道描述（私密频�
 <appId>/<version>/<appId>-<version>.zip       # zip 发布内容（entry 为 zip 内路径）
 ```
 
-### 4.2 本地数据目录（默认 Electron `app.getPath('userData')`，可配置）
+### 4.2 本地数据目录（默认 `<Electron userData>/AppHubData`，可配置）
 
 ```
-apphub.json                                   # 本地设置（schemaVersion, settings）
-channels.json                                 # 频道本地记录 ChannelRecord[]
-channels/<channelId>/channel.json             # 最近一次拉取缓存
-secrets/channel_pri/<channelId>.enc           # 加密的 channel_pri.json（safeStorage）
-library/index.json                            # 已安装 App 索引（可重建）
-library/<channelId>/<appId>/install.json      # 当前安装状态（版本/文件清单/入口）
-library/<channelId>/<appId>/versions/<version>/**  # 实际文件
-tmp/                                          # 下载/解压/打包临时目录（启动时清理）
-logs/                                         # 可选日志
+AppHubData/                                   # 默认位于 Electron userData 下的独立子目录
+├── apphub.json                               # 本地设置（schemaVersion, settings；预留）
+├── channels.json                             # 频道本地记录 ChannelRecord[]
+├── channels/<channelId>/channel.json         # 最近一次拉取缓存
+├── secrets/channel_pri/<channelId>.enc       # 加密的 channel_pri.json（safeStorage）
+├── library/index.json                        # 已安装 App 索引（可重建）
+├── library/<channelId>/<appId>/install.json  # 当前安装状态（版本/文件清单/入口）
+├── library/<channelId>/<appId>/versions/<version>/**  # 实际文件
+├── tmp/                                      # 下载/解压/打包临时目录（启动时清理）
+└── logs/                                     # 目录保留；主进程日志实际写 Electron userData/logs
 ```
 
+- **默认隔离**：AppHub 数据目录为 `<Electron userData>/AppHubData`，与 Electron/Chromium 缓存
+  （`Cache/`、`Code Cache/`、`Local Storage/`、`Preferences` 等）分离；修改 AppHub 数据目录不会改变
+  Electron 路径（不调用 `app.setPath`）；
 - 数据目录可配置：引导文件 `<Electron userData>/apphub-bootstrap.json` 记录自定义 `dataDir`；
-  启动时解析优先级 **`APPHUB_USER_DATA_DIR` 环境变量 > bootstrap 自定义目录 > Electron 默认 userData**；
+  启动时解析优先级 **`APPHUB_DATA_DIR`（仅 AppHub）> `APPHUB_USER_DATA_DIR`（整体覆盖 Electron userData，兼容/测试）> bootstrap 自定义目录 > 默认 `AppHubData`**；
+- **旧版本兼容**：若 userData 根目录直接存在旧版 AppHub 管理数据（`channels.json`/`channels/`/`secrets/`/`library/`/`apphub.json`），
+  首次启动会**移动**到 `AppHubData`（不复制、不迁移 `tmp/`、日志与 Chromium 文件）；迁移失败则本次回退旧目录并记录日志；
 - 设置页修改数据目录时：关闭 core（含所有本机 Host）→ 仅复制 AppHub 管理的数据（`channels.json`、
   `channels/`、`secrets/`、`library/`、`apphub.json`，不复制 `tmp/`、日志与 Chromium 文件）→ 写回
   bootstrap 配置 → 自动重启生效；环境变量模式下数据目录只读；
@@ -281,11 +287,11 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 
 ## 9. 交付验收清单
 
-- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（493 个 Vitest 用例，0 skipped）；
+- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（504 个 Vitest 用例，0 skipped）；
 - [x] `pnpm build` 产出 `out/`，`pnpm dev` 可启动应用；`pnpm package` 产出 `apps/desktop/release/win-unpacked/AppHub.exe`；
 - [x] 演示脚本 `pnpm demo` 在 FTP+nginx 模拟环境与本机 Host 环境下完成创建/发布/订阅/安装/更新/启停验证；
 - [x] README 的 Quickstart 与截图一致；
-- [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5；Phase 5 本机 Host R48–R59、Phase 6 默认 local-host/端口避让/数据目录 R60–R64）；
+- [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5；Phase 5 本机 Host R48–R59、Phase 6 默认 local-host/端口避让/数据目录 R60–R64、Phase 7 AppHubData 隔离/环境变量/旧版迁移 R65–R69）；
 - [x] docs/PROTOCOL.md、STORAGE.md、TESTING.md 完整；
-- [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 15/15，覆盖本机 Host 启停与 URL 可达、端口避让、数据目录来源展示）。
+- [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 17/17，覆盖本机 Host 启停与 URL 可达、端口避让、数据目录三种来源与旧版自动迁移）。
 

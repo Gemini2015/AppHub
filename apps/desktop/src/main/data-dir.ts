@@ -1,16 +1,19 @@
 import { AppError } from '@apphub/protocol';
-import { cp, mkdir, readdir, rm, stat } from 'node:fs/promises';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cp, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Logger } from './logger';
 
 /**
- * 可配置的 AppHub 数据目录（Phase6）。
+ * 可配置的 AppHub 数据目录（Phase7）。
  *
  * 设计要点：
+ *  - 默认 AppHub 数据目录 = `<Electron userData>/AppHubData`，与 Electron/Chromium 缓存隔离；
+ *  - 旧版（Phase6 及更早）数据直接位于 userData 根，启动时做一次性 move 迁移（不迁移 tmp/logs/Chromium）；
  *  - 引导配置 `apphub-bootstrap.json` 永远存放在 **Electron 当前 userData 目录**里
  *    （不是可被用户修改的数据目录），保证下次启动能找回自定义数据目录；
- *  - 数据目录优先级：APPHUB_USER_DATA_DIR（env，只读）> bootstrap.dataDir > Electron userData；
+ *  - 数据目录优先级：APPHUB_DATA_DIR（仅 AppHub 数据）> APPHUB_USER_DATA_DIR（整体覆盖 Electron
+ *    userData 的旧语义）> bootstrap.dataDir > `<userData>/AppHubData`；
  *  - 修改数据目录 = 校验目标 → 关闭 core（会停止本机 Host）→ 只迁移 AppHub 管理的数据
  *    （channels.json/channels/secrets/library/apphub.json）→ 写引导配置 → 重启 App。
  *  - tmp/、logs/ 与 Chromium 缓存不迁移，避免把临时/机器相关状态带过去。
@@ -18,16 +21,30 @@ import type { Logger } from './logger';
 
 export const BOOTSTRAP_FILE_NAME = 'apphub-bootstrap.json';
 export const MANAGED_ENTRIES = ['channels.json', 'channels', 'secrets', 'library', 'apphub.json'] as const;
+/** 默认 AppHub 数据目录名（位于 Electron userData 下，与 Chromium 缓存隔离）。 */
+export const DEFAULT_DATA_DIR_NAME = 'AppHubData';
+/** 判断“新默认目录是否已有数据”时使用的条目（apphub.json 不参与，避免仅设置文件阻止迁移）。 */
+const LEGACY_TARGET_ENTRIES = ['channels.json', 'channels', 'secrets', 'library'] as const;
+
+/** `<electronUserData>/AppHubData`。 */
+export function defaultAppDataDir(electronUserDataDir: string): string {
+  return path.join(path.resolve(electronUserDataDir), DEFAULT_DATA_DIR_NAME);
+}
 
 export type DataDirSource = 'default' | 'custom' | 'env';
+export type DataDirEnvVar = 'APPHUB_DATA_DIR' | 'APPHUB_USER_DATA_DIR';
 
 export interface DataDirInfo {
   dataDir: string;
-  /** Electron 默认 userData 目录（用于展示与“恢复默认”说明）。 */
+  /** AppHub 默认数据目录 `<electron userData>/AppHubData`（用于展示与“恢复默认”说明）。 */
   defaultDataDir: string;
   source: DataDirSource;
   /** env 固定时为 false：设置中不允许修改。 */
   editable: boolean;
+  /** source==='env' 时标记由哪个环境变量固定。 */
+  envVar?: DataDirEnvVar;
+  /** 检测到 userData 根目录存在旧版数据时返回，由 index.ts 在启动阶段执行迁移。 */
+  legacyMigration?: { baseDataDir: string; defaultDataDir: string };
 }
 
 export interface BootstrapConfig {
@@ -158,30 +175,89 @@ export function writeDataDirConfig(electronUserDataDir: string, dataDir: string 
   }
 }
 
+function existingEntries(dir: string, entries: readonly string[]): string[] {
+  return entries.filter((entry) => existsSync(path.join(dir, entry)));
+}
+
+/**
+ * 默认目录解析：同时检测 userData 根目录下的旧版数据，返回需要异步迁移的标记。
+ *  - 旧版数据（根目录任一 managed 条目）存在，且新默认目录还没有数据 → legacyMigration；
+ *  - 新默认目录已有数据 → 不覆盖，跳过迁移（记录 warn）。
+ */
+function resolveDefaultDataDir(baseDataDir: string, defaultDataDir: string, logger?: Logger): DataDirInfo {
+  const baseLegacyEntries = existingEntries(baseDataDir, MANAGED_ENTRIES);
+  if (baseLegacyEntries.length === 0) {
+    return { dataDir: defaultDataDir, defaultDataDir, source: 'default', editable: true };
+  }
+  const targetHasData = existingEntries(defaultDataDir, LEGACY_TARGET_ENTRIES);
+  if (targetHasData.length > 0) {
+    logger?.warn('检测到 userData 根目录存在旧版 AppHub 数据，但新的默认数据目录已有数据，跳过旧版迁移', {
+      baseDataDir,
+      defaultDataDir,
+      legacyEntries: baseLegacyEntries,
+      existingTargetEntries: targetHasData,
+    });
+    return { dataDir: defaultDataDir, defaultDataDir, source: 'default', editable: true };
+  }
+  return {
+    dataDir: defaultDataDir,
+    defaultDataDir,
+    source: 'default',
+    editable: true,
+    legacyMigration: { baseDataDir, defaultDataDir },
+  };
+}
+
 /**
  * 解析本次运行使用的数据目录。
- * env 模式下不读取 bootstrap（E2E/测试要求 env 只读、不依赖引导配置）。
+ *
+ * 优先级：
+ *  1. `APPHUB_DATA_DIR`：只改 AppHub 数据目录（不动 Electron userData/缓存），只读，不读 bootstrap、不迁移旧版；
+ *  2. `APPHUB_USER_DATA_DIR`：历史语义——index.ts 已在 ready 前 app.setPath 覆盖 Electron userData，
+ *     因此 AppHub 数据直接位于该目录根（只读，不读 bootstrap）；
+ *  3. bootstrap.dataDir（必须是绝对路径）→ custom；
+ *  4. 默认 `<electronUserData>/AppHubData`，并检测旧版数据（位于 userData 根）供 index 启动时迁移。
  */
 export function resolveAppDataDir(options: ResolveAppDataDirOptions): DataDirInfo {
-  const defaultDataDir = path.resolve(options.electronUserDataDir);
-  const envOverride = options.env?.APPHUB_USER_DATA_DIR?.trim();
-  if (envOverride && envOverride.length > 0) {
+  const baseDataDir = path.resolve(options.electronUserDataDir);
+  const defaultDataDir = defaultAppDataDir(baseDataDir);
+
+  const appDataDirEnv = options.env?.APPHUB_DATA_DIR?.trim();
+  if (appDataDirEnv && appDataDirEnv.length > 0) {
     return {
-      dataDir: path.resolve(envOverride),
+      dataDir: path.resolve(appDataDirEnv),
       defaultDataDir,
       source: 'env',
       editable: false,
+      envVar: 'APPHUB_DATA_DIR',
     };
   }
-  const config = readDataDirConfig(defaultDataDir, options.logger);
-  if (config.dataDir) {
-    // 引导配置与默认目录一致时按默认处理（例如手工编辑/恢复默认后的残留）
-    if (isSamePath(config.dataDir, defaultDataDir)) {
-      return { dataDir: defaultDataDir, defaultDataDir, source: 'default', editable: true };
-    }
-    return { dataDir: path.resolve(config.dataDir), defaultDataDir, source: 'custom', editable: true };
+
+  const userDataDirEnv = options.env?.APPHUB_USER_DATA_DIR?.trim();
+  if (userDataDirEnv && userDataDirEnv.length > 0) {
+    return {
+      dataDir: baseDataDir,
+      defaultDataDir,
+      source: 'env',
+      editable: false,
+      envVar: 'APPHUB_USER_DATA_DIR',
+    };
   }
-  return { dataDir: defaultDataDir, defaultDataDir, source: 'default', editable: true };
+
+  const config = readDataDirConfig(baseDataDir, options.logger);
+  if (config.dataDir) {
+    // 引导配置指向默认 AppHubData 目录时按默认处理（例如手工编辑后的残留）
+    if (isSamePath(config.dataDir, defaultDataDir)) {
+      return resolveDefaultDataDir(baseDataDir, defaultDataDir, options.logger);
+    }
+    return {
+      dataDir: path.resolve(config.dataDir),
+      defaultDataDir,
+      source: 'custom',
+      editable: true,
+    };
+  }
+  return resolveDefaultDataDir(baseDataDir, defaultDataDir, options.logger);
 }
 
 function assertValidTargetPath(targetPath: string, platform: NodeJS.Platform): string {
@@ -210,7 +286,8 @@ function assertValidTargetPath(targetPath: string, platform: NodeJS.Platform): s
  * 校验“修改数据目录”的目标：
  *  - 必须是绝对路径、不是当前目录、不与当前目录互相嵌套（避免递归复制）；
  *  - 不能是已有文件；
- *  - 已存在且非空时拒绝（CONFLICT），除非目标是 defaultDataDir（恢复默认，允许非空）；
+ *  - 已存在且非空时拒绝（CONFLICT），除非目标是 defaultDataDir（AppHub 默认子目录
+ *    `<electron userData>/AppHubData`，即“恢复默认”，允许非空）；
  *  - 通过后确保目录存在（不存在则创建）。
  */
 export async function validateTargetDataDir(
@@ -327,6 +404,111 @@ export async function migrateAppHubData(
     copied.push(entry);
   }
   return copied;
+}
+
+// ---------------------------------------------------------------------------
+// 旧版数据迁移（userData 根 → <userData>/AppHubData）
+// ---------------------------------------------------------------------------
+
+export type LegacyMigrationResult =
+  | { migrated: true; entries: string[] }
+  | { migrated: false; reason: 'target-not-empty' };
+
+export interface LegacyMigrationDeps {
+  renameImpl?: (from: string, to: string) => Promise<void>;
+  cpImpl?: (from: string, to: string) => Promise<void>;
+  rmImpl?: (target: string) => Promise<void>;
+  mkdirImpl?: (target: string, options: { recursive: boolean }) => Promise<unknown>;
+  existsImpl?: (target: string) => boolean;
+}
+
+async function moveEntry(
+  from: string,
+  to: string,
+  deps: LegacyMigrationDeps,
+): Promise<void> {
+  const renameImpl = deps.renameImpl ?? rename;
+  try {
+    await renameImpl(from, to);
+    return;
+  } catch (err) {
+    // 跨盘（移动盘/不同分区）时 rename 报 EXDEV，退化为 copy + rm（语义仍是 move，不保留双份）
+    if (errorCode(err) !== 'EXDEV') throw err;
+  }
+  await (deps.cpImpl?.(from, to) ?? cp(from, to, { recursive: true, force: true, errorOnExist: false }));
+  await (deps.rmImpl?.(from) ?? rm(from, { recursive: true, force: true }));
+}
+
+/**
+ * 把旧版（直接位于 Electron userData 根）的 AppHub 数据迁移到默认子目录。
+ *
+ *  - 只迁移 MANAGED_ENTRIES（存在才迁移），不迁移 tmp/logs/Chromium 缓存；
+ *  - 目标已有任一 managed 条目时视为“已迁移/新数据”，返回 migrated:false，不覆盖；
+ *  - 采用 move（rename，EXDEV 时 copy+rm），避免旧版 library 等大数据出现双份；
+ *  - 迁移中途失败会尽力回滚已移动条目再抛 AppError('IO')，让 index.ts 本次回退旧目录、下次启动重试。
+ */
+export async function migrateLegacyAppHubData(
+  baseDataDir: string,
+  defaultDataDir: string,
+  logger?: Logger,
+  deps: LegacyMigrationDeps = {},
+): Promise<LegacyMigrationResult> {
+  const base = path.resolve(baseDataDir);
+  const target = path.resolve(defaultDataDir);
+  if (isSamePath(base, target)) {
+    throw new AppError('VALIDATION', '旧版数据目录与默认数据目录相同，无需迁移');
+  }
+  const exists = deps.existsImpl ?? existsSync;
+  const legacyEntries = MANAGED_ENTRIES.filter((entry) => exists(path.join(base, entry)));
+  if (legacyEntries.length === 0) {
+    return { migrated: true, entries: [] };
+  }
+  const targetHasManaged = MANAGED_ENTRIES.some((entry) => exists(path.join(target, entry)));
+  if (targetHasManaged) {
+    logger?.warn('默认数据目录已有 AppHub 数据，跳过旧版迁移（不覆盖新数据）', {
+      baseDataDir: base,
+      defaultDataDir: target,
+    });
+    return { migrated: false, reason: 'target-not-empty' };
+  }
+
+  const mkdirImpl = deps.mkdirImpl ?? ((dir: string) => mkdir(dir, { recursive: true }));
+  try {
+    await mkdirImpl(target, { recursive: true });
+  } catch (err) {
+    throw new AppError('IO', `无法创建默认数据目录：${AppError.from(err).message}`, {
+      defaultDataDir: target,
+    });
+  }
+
+  const moved: string[] = [];
+  try {
+    for (const entry of legacyEntries) {
+      await moveEntry(path.join(base, entry), path.join(target, entry), deps);
+      moved.push(entry);
+    }
+  } catch (err) {
+    // 回滚已移动条目，避免数据被拆散导致下次启动误判“新目录已有数据”
+    for (const entry of [...moved].reverse()) {
+      try {
+        await moveEntry(path.join(target, entry), path.join(base, entry), deps);
+      } catch {
+        /* 回滚失败：保留现状并交由上层记录错误 */
+      }
+    }
+    throw new AppError('IO', `迁移旧版 AppHub 数据失败：${AppError.from(err).message}`, {
+      baseDataDir: base,
+      defaultDataDir: target,
+      movedEntries: moved,
+    });
+  }
+
+  logger?.info('已将旧版 AppHub 数据迁移到默认子目录', {
+    entries: moved,
+    baseDataDir: base,
+    defaultDataDir: target,
+  });
+  return { migrated: true, entries: moved };
 }
 
 // ---------------------------------------------------------------------------

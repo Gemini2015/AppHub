@@ -1,18 +1,21 @@
 import { AppError } from '@apphub/protocol';
 import { createFakeLogger } from '@apphub/testkit';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BOOTSTRAP_FILE_NAME,
+  DEFAULT_DATA_DIR_NAME,
   MANAGED_ENTRIES,
   bootstrapFilePath,
   decideStartupDataDirRecovery,
+  defaultAppDataDir,
   handleStartupDataDirFailure,
   isPathInside,
   isSamePath,
   migrateAppHubData,
+  migrateLegacyAppHubData,
   readDataDirConfig,
   resolveAppDataDir,
   validateTargetDataDir,
@@ -97,63 +100,134 @@ describe('data-dir：bootstrap 引导配置', () => {
 // 数据目录解析优先级
 // ---------------------------------------------------------------------------
 
-describe('data-dir：resolveAppDataDir 优先级', () => {
-  it('无 env / 无 bootstrap → Electron userData，source=default 且可编辑', () => {
-    const userData = userDataDir();
-    const resolved = resolveAppDataDir({ electronUserDataDir: userData, env: {} });
+describe('data-dir：resolveAppDataDir 优先级（Phase7）', () => {
+  function defaultDirOf(base: string): string {
+    return path.join(path.resolve(base), DEFAULT_DATA_DIR_NAME);
+  }
+
+  it('无 env / 无 bootstrap / 无旧数据 → <userData>/AppHubData，source=default 且可编辑', () => {
+    const base = userDataDir();
+    expect(DEFAULT_DATA_DIR_NAME).toBe('AppHubData');
+    expect(defaultAppDataDir(base)).toBe(path.resolve(base, 'AppHubData'));
+    const resolved = resolveAppDataDir({ electronUserDataDir: base, env: {} });
     expect(resolved).toEqual({
-      dataDir: path.resolve(userData),
-      defaultDataDir: path.resolve(userData),
+      dataDir: defaultDirOf(base),
+      defaultDataDir: defaultDirOf(base),
       source: 'default',
       editable: true,
     });
   });
 
-  it('bootstrap 自定义目录 → source=custom 且可编辑', async () => {
-    const userData = userDataDir();
-    await mkdir(userData, { recursive: true });
+  it('bootstrap 自定义目录 → source=custom，defaultDataDir 仍为 AppHubData 子目录', async () => {
+    const base = userDataDir();
+    await mkdir(base, { recursive: true });
     const custom = path.join(tempDir, 'd-drive-data');
-    writeDataDirConfig(userData, custom);
-    const resolved = resolveAppDataDir({ electronUserDataDir: userData, env: {} });
+    writeDataDirConfig(base, custom);
+    const resolved = resolveAppDataDir({ electronUserDataDir: base, env: {} });
     expect(resolved).toMatchObject({ dataDir: path.resolve(custom), source: 'custom', editable: true });
-    expect(resolved.defaultDataDir).toBe(path.resolve(userData));
+    expect(resolved.defaultDataDir).toBe(defaultDirOf(base));
+    expect(resolved.legacyMigration).toBeUndefined();
   });
 
-  it('env 优先级最高（只读），且不读取 bootstrap', async () => {
-    const userData = userDataDir();
-    await mkdir(userData, { recursive: true });
-    writeDataDirConfig(userData, path.join(tempDir, 'bootstrap-data'));
-    const envDir = path.join(tempDir, 'env-data');
+  it('APPHUB_USER_DATA_DIR 保持旧语义：dataDir=base，只读、不读 bootstrap', async () => {
+    const base = userDataDir();
+    await mkdir(base, { recursive: true });
+    writeDataDirConfig(base, path.join(tempDir, 'bootstrap-data'));
     const resolved = resolveAppDataDir({
-      electronUserDataDir: userData,
-      env: { APPHUB_USER_DATA_DIR: envDir },
+      electronUserDataDir: base,
+      env: { APPHUB_USER_DATA_DIR: base },
     });
     expect(resolved).toMatchObject({
-      dataDir: path.resolve(envDir),
+      dataDir: path.resolve(base),
+      defaultDataDir: defaultDirOf(base),
       source: 'env',
       editable: false,
+      envVar: 'APPHUB_USER_DATA_DIR',
     });
-    expect(resolved.dataDir).not.toBe(path.resolve(path.join(tempDir, 'bootstrap-data')));
+    expect(resolved.legacyMigration).toBeUndefined();
   });
 
-  it('空白 env 视为未设置；相对路径 bootstrap 被忽略', async () => {
-    const userData = userDataDir();
-    await mkdir(userData, { recursive: true });
-    await writeFile(bootstrapFilePath(userData), JSON.stringify({ dataDir: './relative' }), 'utf8');
+  it('APPHUB_DATA_DIR 优先级最高（仅 AppHub 数据、只读），不读 bootstrap、不做旧版迁移', async () => {
+    const base = userDataDir();
+    await mkdir(base, { recursive: true });
+    writeDataDirConfig(base, path.join(tempDir, 'bootstrap-data'));
+    // 旧版数据在根目录也不应触发迁移
+    await createFile('userData/channels.json', '{"legacy":true}');
+    const appDataEnv = path.join(tempDir, 'apphub-data-env');
     const resolved = resolveAppDataDir({
-      electronUserDataDir: userData,
-      env: { APPHUB_USER_DATA_DIR: '   ' },
+      electronUserDataDir: base,
+      env: { APPHUB_DATA_DIR: appDataEnv, APPHUB_USER_DATA_DIR: path.join(tempDir, 'userdata-env') },
+    });
+    expect(resolved).toMatchObject({
+      dataDir: path.resolve(appDataEnv),
+      defaultDataDir: defaultDirOf(base),
+      source: 'env',
+      editable: false,
+      envVar: 'APPHUB_DATA_DIR',
+    });
+    expect(resolved.legacyMigration).toBeUndefined();
+  });
+
+  it('空白 env 视为未设置；相对路径 bootstrap 被忽略 → 默认 AppHubData', async () => {
+    const base = userDataDir();
+    await mkdir(base, { recursive: true });
+    await writeFile(bootstrapFilePath(base), JSON.stringify({ dataDir: './relative' }), 'utf8');
+    const resolved = resolveAppDataDir({
+      electronUserDataDir: base,
+      env: { APPHUB_USER_DATA_DIR: '   ', APPHUB_DATA_DIR: '   ' },
       logger: createFakeLogger(),
     });
-    expect(resolved).toMatchObject({ dataDir: path.resolve(userData), source: 'default', editable: true });
+    expect(resolved).toMatchObject({
+      dataDir: defaultDirOf(base),
+      defaultDataDir: defaultDirOf(base),
+      source: 'default',
+      editable: true,
+    });
   });
 
-  it('bootstrap 指向默认目录时按 default 处理', async () => {
-    const userData = userDataDir();
-    await mkdir(userData, { recursive: true });
-    writeDataDirConfig(userData, userData);
-    const resolved = resolveAppDataDir({ electronUserDataDir: userData, env: {} });
-    expect(resolved).toMatchObject({ dataDir: path.resolve(userData), source: 'default', editable: true });
+  it('bootstrap 指向 AppHubData 子目录时按 default 处理', async () => {
+    const base = userDataDir();
+    await mkdir(base, { recursive: true });
+    writeDataDirConfig(base, defaultDirOf(base));
+    const resolved = resolveAppDataDir({ electronUserDataDir: base, env: {} });
+    expect(resolved).toMatchObject({
+      dataDir: defaultDirOf(base),
+      defaultDataDir: defaultDirOf(base),
+      source: 'default',
+      editable: true,
+    });
+  });
+
+  it('检测旧版数据（userData 根）→ 返回 legacyMigration 标记', async () => {
+    const base = userDataDir();
+    await createFile('userData/channels.json', '{"channels":1}');
+    await createFile('userData/channels/ch_1/channel.json', '{}');
+    const resolved = resolveAppDataDir({ electronUserDataDir: base, env: {} });
+    expect(resolved.dataDir).toBe(defaultDirOf(base));
+    expect(resolved.source).toBe('default');
+    expect(resolved.legacyMigration).toEqual({
+      baseDataDir: path.resolve(base),
+      defaultDataDir: defaultDirOf(base),
+    });
+  });
+
+  it('旧版数据存在但 AppHubData 已有数据 → 不迁移并 warn', async () => {
+    const base = userDataDir();
+    await createFile('userData/channels.json', '{"legacy":true}');
+    await createFile('userData/AppHubData/channels.json', '{"new":true}');
+    const logger = createFakeLogger();
+    const resolved = resolveAppDataDir({ electronUserDataDir: base, env: {}, logger });
+    expect(resolved.legacyMigration).toBeUndefined();
+    expect(resolved.dataDir).toBe(defaultDirOf(base));
+    expect(logger.entries.some((entry) => entry.level === 'warn')).toBe(true);
+  });
+
+  it('仅 apphub.json 不算“新默认目录已有数据”（仍执行旧版迁移）', async () => {
+    const base = userDataDir();
+    await createFile('userData/channels.json', '{"legacy":true}');
+    await createFile('userData/AppHubData/apphub.json', '{"settings":1}');
+    const resolved = resolveAppDataDir({ electronUserDataDir: base, env: {} });
+    expect(resolved.legacyMigration).toBeDefined();
   });
 });
 
@@ -363,6 +437,118 @@ describe('data-dir：路径工具', () => {
     expect(isSamePath(base, base)).toBe(true);
     expect(isSamePath(base, path.join(tempDir, 'a'))).toBe(true);
     expect(isSamePath(base, path.join(tempDir, 'b'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 旧版数据迁移（userData 根 → AppHubData）
+// ---------------------------------------------------------------------------
+
+describe('data-dir：migrateLegacyAppHubData', () => {
+  async function createLegacyLayout(): Promise<{ base: string; target: string }> {
+    const base = path.join(tempDir, 'userData');
+    const target = defaultAppDataDir(base);
+    await createFile('userData/channels.json', '{"channels":1}');
+    await createFile('userData/apphub.json', '{"settings":1}');
+    await createFile('userData/channels/ch_1/channel.json', '{"id":"ch_1"}');
+    await createFile('userData/secrets/channel_pri/ch_1.enc', 'cipher');
+    await createFile('userData/library/index.json', '{"apps":[]}');
+    await createFile('userData/tmp/download.bin', 'temp');
+    await createFile('userData/logs/main.log', 'log');
+    await createFile('userData/Cache/cache.bin', 'chromium');
+    await createFile('userData/Preferences', '{}');
+    return { base, target };
+  }
+
+  it('移动 managed 条目到 AppHubData，不迁移 tmp/logs/Chromium，源目录不再保留 managed', async () => {
+    const { base, target } = await createLegacyLayout();
+    const result = await migrateLegacyAppHubData(base, target);
+    expect(result.migrated).toBe(true);
+    if (!result.migrated) throw new Error('unreachable');
+    expect([...result.entries].sort()).toEqual([...MANAGED_ENTRIES].sort());
+
+    await expect(readFile(path.join(target, 'channels.json'), 'utf8')).resolves.toBe('{"channels":1}');
+    await expect(readFile(path.join(target, 'channels', 'ch_1', 'channel.json'), 'utf8')).resolves.toBe(
+      '{"id":"ch_1"}',
+    );
+    await expect(readFile(path.join(target, 'secrets', 'channel_pri', 'ch_1.enc'), 'utf8')).resolves.toBe('cipher');
+    await expect(readFile(path.join(target, 'library', 'index.json'), 'utf8')).resolves.toBe('{"apps":[]}');
+    await expect(readFile(path.join(target, 'apphub.json'), 'utf8')).resolves.toBe('{"settings":1}');
+
+    // move 语义：源目录不再保留 managed 条目
+    for (const entry of MANAGED_ENTRIES) {
+      await expect(stat(path.join(base, entry))).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    // tmp/logs/Chromium 状态保留在 userData 根，不进入 AppHubData
+    await expect(stat(path.join(base, 'tmp', 'download.bin'))).resolves.toBeTruthy();
+    await expect(stat(path.join(base, 'logs', 'main.log'))).resolves.toBeTruthy();
+    await expect(stat(path.join(base, 'Cache', 'cache.bin'))).resolves.toBeTruthy();
+    await expect(stat(path.join(base, 'Preferences'))).resolves.toBeTruthy();
+    await expect(stat(path.join(target, 'tmp'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(path.join(target, 'logs'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('目标已有任一 managed 条目 → migrated:false，不覆盖也不动源', async () => {
+    const { base, target } = await createLegacyLayout();
+    await createFile('userData/AppHubData/channels.json', '{"new":true}');
+    const result = await migrateLegacyAppHubData(base, target);
+    expect(result).toEqual({ migrated: false, reason: 'target-not-empty' });
+    await expect(readFile(path.join(target, 'channels.json'), 'utf8')).resolves.toBe('{"new":true}');
+    await expect(readFile(path.join(base, 'channels.json'), 'utf8')).resolves.toBe('{"channels":1}');
+  });
+
+  it('源目录无 managed 条目 → migrated:true entries=[]', async () => {
+    const base = path.join(tempDir, 'empty-userData');
+    await mkdir(base, { recursive: true });
+    await expect(migrateLegacyAppHubData(base, defaultAppDataDir(base))).resolves.toEqual({
+      migrated: true,
+      entries: [],
+    });
+  });
+
+  it('相同目录 → VALIDATION', async () => {
+    const base = path.join(tempDir, 'same-dir');
+    await mkdir(base, { recursive: true });
+    await expect(migrateLegacyAppHubData(base, base)).rejects.toMatchObject({ code: 'VALIDATION' });
+  });
+
+  it('rename 非 EXDEV 失败 → 回滚已移动条目并抛 AppError(IO)', async () => {
+    const { base, target } = await createLegacyLayout();
+    const renameImpl = vi.fn(async (from: string, to: string) => {
+      if (from.includes(`${path.sep}secrets`)) {
+        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      }
+      await rename(from, to);
+    });
+    await expect(migrateLegacyAppHubData(base, target, undefined, { renameImpl })).rejects.toMatchObject({
+      code: 'IO',
+    });
+    // 回滚后旧版数据仍完整，便于下次启动重试
+    await expect(readFile(path.join(base, 'channels.json'), 'utf8')).resolves.toBe('{"channels":1}');
+    await expect(stat(path.join(base, 'channels', 'ch_1', 'channel.json'))).resolves.toBeTruthy();
+    await expect(stat(path.join(base, 'secrets', 'channel_pri', 'ch_1.enc'))).resolves.toBeTruthy();
+    for (const entry of MANAGED_ENTRIES) {
+      await expect(stat(path.join(target, entry))).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  });
+
+  it('跨盘 EXDEV 时退化为 copy+rm（仍是移动语义，不留双份）', async () => {
+    const { base, target } = await createLegacyLayout();
+    const renameImpl = vi.fn(async () => {
+      throw Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' });
+    });
+    const cpImpl = vi.fn(async (from: string, to: string) => {
+      await cp(from, to, { recursive: true, force: true });
+    });
+    const rmImpl = vi.fn(async (from: string) => {
+      await rm(from, { recursive: true, force: true });
+    });
+    const result = await migrateLegacyAppHubData(base, target, undefined, { renameImpl, cpImpl, rmImpl });
+    expect(result.migrated).toBe(true);
+    expect(cpImpl.mock.calls.length).toBe(MANAGED_ENTRIES.length);
+    expect(rmImpl).toHaveBeenCalledTimes(MANAGED_ENTRIES.length);
+    await expect(stat(path.join(base, 'channels.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(path.join(target, 'channels.json'), 'utf8')).resolves.toBe('{"channels":1}');
   });
 });
 

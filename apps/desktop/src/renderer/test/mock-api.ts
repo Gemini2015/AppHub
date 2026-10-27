@@ -203,10 +203,10 @@ export function makeSystemInfo(overrides: Partial<SystemInfoDTO> = {}): SystemIn
     nodeVersion: '22.20.0',
     platform: 'win32',
     arch: 'x64',
-    dataDir: 'C:/Users/test/AppData/Roaming/AppHub',
+    dataDir: 'C:/Users/test/AppData/Roaming/AppHub/AppHubData',
     dataDirSource: 'default',
     dataDirEditable: true,
-    defaultDataDir: 'C:/Users/test/AppData/Roaming/AppHub',
+    defaultDataDir: 'C:/Users/test/AppData/Roaming/AppHub/AppHubData',
     channelCount: 1,
     installedCount: 1,
     ...overrides,
@@ -334,7 +334,7 @@ export function createMockApi(options: MockApiOptions = {}): MockAppHubApi {
       pickDirectory: vi.fn(async () => ok(PICKED_DIR)),
       changeDataDir: vi.fn(async (input: { path: string }) =>
         ok({
-          previousDataDir: 'C:/Users/test/AppData/Roaming/AppHub',
+          previousDataDir: 'C:/Users/test/AppData/Roaming/AppHub/AppHubData',
           newDataDir: input.path,
           restarting: true,
         }),

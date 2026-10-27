@@ -7,6 +7,7 @@ import { CoreManager } from './core-manager';
 import {
   handleStartupDataDirFailure,
   migrateAppHubData,
+  migrateLegacyAppHubData,
   resolveAppDataDir,
   validateTargetDataDir,
   writeDataDirConfig,
@@ -121,7 +122,8 @@ if (!gotSingleInstanceLock) {
 }
 
 async function bootstrap(): Promise<void> {
-  // Electron 当前 userData（env 覆盖时它已经是 env 目录）：引导配置与日志都放这里。
+  // Electron 当前 userData（APPHUB_USER_DATA_DIR 覆盖时它已经是 env 目录）：
+  // 引导配置与日志都放这里；AppHub 数据默认在 <userData>/AppHubData 子目录。
   const electronUserData = app.getPath('userData');
   logger = createLogger({
     logDir: path.join(electronUserData, 'logs'),
@@ -136,10 +138,18 @@ async function bootstrap(): Promise<void> {
     userData: electronUserData,
   });
   if (USER_DATA_OVERRIDE) {
-    logger.info('已通过 APPHUB_USER_DATA_DIR 覆盖数据目录（设置中不可修改）', { userData: electronUserData });
+    logger.info('已通过 APPHUB_USER_DATA_DIR 覆盖 Electron userData（AppHub 数据位于该目录根）', {
+      userData: electronUserData,
+    });
+  }
+  const appDataDirEnv = process.env.APPHUB_DATA_DIR?.trim() || undefined;
+  if (appDataDirEnv) {
+    logger.info('已通过 APPHUB_DATA_DIR 指定 AppHub 数据目录（不影响 Electron userData；设置中不可修改）', {
+      dataDir: appDataDirEnv,
+    });
   }
 
-  // 数据目录：env > apphub-bootstrap.json > Electron userData
+  // 数据目录：APPHUB_DATA_DIR > APPHUB_USER_DATA_DIR > bootstrap.json > <userData>/AppHubData
   const resolvedDataDir = resolveAppDataDir({
     electronUserDataDir: electronUserData,
     env: process.env,
@@ -148,18 +158,48 @@ async function bootstrap(): Promise<void> {
   logger.info('数据目录已解析', {
     dataDir: resolvedDataDir.dataDir,
     source: resolvedDataDir.source,
+    envVar: resolvedDataDir.envVar,
     defaultDataDir: resolvedDataDir.defaultDataDir,
     editable: resolvedDataDir.editable,
+    legacyMigration: resolvedDataDir.legacyMigration !== undefined,
   });
 
+  // 旧版兼容：Phase6 及更早版本的数据直接位于 userData 根，启动时 move 到 AppHubData。
+  let effectiveDataDir = resolvedDataDir.dataDir;
+  if (resolvedDataDir.legacyMigration) {
+    const legacy = resolvedDataDir.legacyMigration;
+    try {
+      const migration = await migrateLegacyAppHubData(legacy.baseDataDir, legacy.defaultDataDir, logger);
+      effectiveDataDir = legacy.defaultDataDir;
+      if (migration.migrated) {
+        logger.info('已将旧版数据目录迁移到 AppHubData', {
+          entries: migration.entries,
+          from: legacy.baseDataDir,
+          to: legacy.defaultDataDir,
+        });
+      } else {
+        logger.info('默认数据目录已有数据，跳过旧版迁移', { reason: migration.reason });
+      }
+    } catch (err) {
+      // 迁移失败：本次会话回退到旧版 userData 根目录（数据仍可用），下次启动重试。
+      logger.error('迁移旧版数据目录失败，本次回退到 userData 根目录（下次启动重试）', {
+        code: err instanceof AppError ? err.code : 'INTERNAL',
+        message: err instanceof Error ? err.message : String(err),
+        baseDataDir: legacy.baseDataDir,
+        defaultDataDir: legacy.defaultDataDir,
+      });
+      effectiveDataDir = legacy.baseDataDir;
+    }
+  }
+
   const secretBox = createSecretBox({ logger });
-  coreManager = new CoreManager({ dataDir: resolvedDataDir.dataDir, logger, secretBox });
+  coreManager = new CoreManager({ dataDir: effectiveDataDir, logger, secretBox });
   try {
     await coreManager.prepare();
   } catch (err) {
     // 自定义数据目录在启动期不可用（移动盘拔出/权限变化/目录被删除）时，
     // 不能让用户永远进不了 UI：弹窗提供“恢复默认并重启 / 退出”。
-    handleStartupPrepareFailure(electronUserData, resolvedDataDir, err);
+    handleStartupPrepareFailure(electronUserData, { ...resolvedDataDir, dataDir: effectiveDataDir }, err);
     return;
   }
 
@@ -177,7 +217,7 @@ async function bootstrap(): Promise<void> {
       .map((window) => window.webContents as unknown as IpcSenderLike);
 
   const dataDirInfo: DataDirInfo = {
-    dataDir: resolvedDataDir.dataDir,
+    dataDir: effectiveDataDir,
     defaultDataDir: resolvedDataDir.defaultDataDir,
     source: resolvedDataDir.source,
     editable: resolvedDataDir.editable,
@@ -194,7 +234,7 @@ async function bootstrap(): Promise<void> {
         changeAppDataDir(
           {
             electronUserDataDir: electronUserData,
-            currentDataDir: resolvedDataDir.dataDir,
+            currentDataDir: effectiveDataDir,
             defaultDataDir: resolvedDataDir.defaultDataDir,
             editable: resolvedDataDir.editable,
           },
@@ -211,7 +251,9 @@ async function bootstrap(): Promise<void> {
   logger.info('主进程初始化完成', {
     devServerUrl: DEV_SERVER_URL ?? '(file://)',
     rendererIndexFile,
-    dataDir: resolvedDataDir.dataDir,
+    dataDir: effectiveDataDir,
+    dataDirSource: resolvedDataDir.source,
+    defaultDataDir: resolvedDataDir.defaultDataDir,
   });
 }
 

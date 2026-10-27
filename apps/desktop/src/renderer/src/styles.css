@@ -2175,6 +2175,22 @@ a {
   color: var(--warn);
 }
 
+/* 环境变量语义说明列表（设置页数据目录来源为 env 时） */
+.env-var-list {
+  margin: 6px 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.env-var-list li::marker {
+  color: var(--accent);
+}
+
 /* =========================================================================
    设置 / 关于
    ========================================================================= */

@@ -1,101 +1,202 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { getSystemInfo } from './support/app-api';
+import { getSystemInfo, listChannels } from './support/app-api';
 import { launchApp } from './support/electron-app';
 import { TMP_DIR } from './support/paths';
 import { expect, test } from './support/test-fixtures';
 import { TESTID, TIMEOUTS, waitForShell } from './support/ui';
 
 /**
- * Phase 6：设置页「数据目录」E2E。
+ * Phase 6/7：设置页「数据目录」E2E。
  *
- * 覆盖三个"启动期即可确定"的分支（均不需要点击「更改数据目录」，因此不触发原生目录对话框，
- * 也不触发迁移/重启）：
- *  1. env 只读：APPHUB_USER_DATA_DIR 启动 ⇒ source='env'、editable=false、按钮 disabled；
- *  2. 默认可编辑：Chromium `--user-data-dir` 隔离 userData（不设 env）⇒ source='default'、editable=true；
- *  3. 自定义目录：在隔离 userData 里预置 `apphub-bootstrap.json` 指向另一临时目录 ⇒ source='custom'、
- *     dataDir=自定义目录、defaultDataDir=隔离 userData。
+ * Phase 7 语义：
+ *  - 默认 AppHub 数据目录 = `<Electron userData>/AppHubData`（与 Chromium 缓存隔离）；
+ *  - `APPHUB_DATA_DIR`：只改 AppHub 数据目录，不改 Electron userData；source=env、editable=false；
+ *  - `APPHUB_USER_DATA_DIR`：历史语义，整体覆盖 Electron userData，AppHub 数据直接位于该目录根；
+ *  - 旧版数据（直接位于 userData 根）启动时自动 move 到 `AppHubData`。
  *
- * 为什么不自动化"点击更改数据目录 + 迁移 + 重启"：
- *  - 入口会先弹 **原生目录选择框**（Playwright 无法驱动），确认后 App 会 **重启**；
- *  - 重启会中断 Playwright 与 Electron 的连接，破坏用例与报告的归属关系；
- *  - 迁移/重启决策与文件复制逻辑由 `apps/desktop/src/main/data-dir.test.ts` 单测覆盖，
- *    真实交互列入手工清单 M28–M31（见 docs/TESTING.md §8.9、§11.5）。
+ * 覆盖方式（均只验证启动期行为，不点击「更改数据目录」）：
+ *  1. env（APPHUB_USER_DATA_DIR，E2E 默认隔离）；
+ *  2. env（APPHUB_DATA_DIR；用 `--user-data-dir` 隔离 Electron userData、不设 APPHUB_USER_DATA_DIR）；
+ *  3. default（--user-data-dir 隔离、无 env）；
+ *  4. custom（隔离 userData 下预置 `apphub-bootstrap.json`）；
+ *  5. 旧版迁移（隔离 userData 根预置 Phase6 数据结构，启动后应移动到 AppHubData）。
+ *
+ * 为什么"点击更改数据目录 → 迁移 → 重启"仍不自动化：
+ *  - 入口先弹原生目录选择框（Playwright 无法驱动），确认后 App 重启并断开会话；
+ *  - 迁移/校验/重启决策由 `apps/desktop/src/main/data-dir.test.ts` 单测 + 手工 M28–M34 覆盖。
  */
-test.describe('设置页：数据目录（Phase 6）', () => {
-  test('env 模式：来源=环境变量固定、不可编辑、system.info 契约字段正确', async ({
+
+async function createTempDir(prefix: string): Promise<string> {
+  await fs.mkdir(TMP_DIR, { recursive: true });
+  return fs.mkdtemp(path.join(TMP_DIR, prefix));
+}
+
+function normalize(target: string): string {
+  return path.resolve(target).toLowerCase();
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 构造一个合法的旧版 `channels.json`（subscriber 记录，无需 channel_pri）。 */
+function legacyChannelsJson(channelId: string): string {
+  return `${JSON.stringify(
+    {
+      schemaVersion: 1,
+      kind: 'apphub-channels',
+      channels: [
+        {
+          channelId,
+          url: 'http://127.0.0.1:1/channel.json',
+          visibility: 'public',
+          role: 'subscriber',
+          source: 'subscribed',
+          channelName: 'Legacy Channel',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-02T00:00:00.000Z',
+          lastFetchedAt: '2026-01-02T00:00:00.000Z',
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+/** 构造合法的 channel.json 缓存（与 channels.json 中的记录对应）。 */
+function legacyChannelCacheJson(channelId: string): string {
+  return `${JSON.stringify(
+    {
+      schemaVersion: 1,
+      kind: 'apphub-channel',
+      id: channelId,
+      name: 'Legacy Channel',
+      description: 'Phase6 旧版数据（位于 userData 根）',
+      visibility: 'public',
+      owner: { name: 'Legacy Owner' },
+      apps: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+test.describe('设置页：数据目录（Phase 6/7）', () => {
+  test('env（APPHUB_USER_DATA_DIR）：source=env、editable=false、AppHub 数据位于该目录根、默认目录=<userData>/AppHubData', async ({
     window,
     runningApp,
   }) => {
     await waitForShell(window);
-
-    // 1) IPC 契约字段（真实主进程）
     const info = await getSystemInfo(window);
+    const expectedDefault = path.join(runningApp.userDataDir, 'AppHubData');
+
     expect(info.dataDirSource).toBe('env');
     expect(info.dataDirEditable).toBe(false);
-    expect(typeof info.defaultDataDir).toBe('string');
     expect(path.isAbsolute(info.defaultDataDir)).toBe(true);
-    // env 覆盖了 Electron userData：当前数据目录就是 APPHUB_USER_DATA_DIR 临时目录，
-    // defaultDataDir 也随之等于该 userData 目录（主进程 resolveAppDataDir 的既定行为）。
-    expect(path.resolve(info.dataDir).toLowerCase()).toBe(
-      path.resolve(runningApp.userDataDir).toLowerCase(),
-    );
-    expect(path.resolve(info.defaultDataDir).toLowerCase()).toBe(
-      path.resolve(runningApp.userDataDir).toLowerCase(),
-    );
+    // 历史语义：APPHUB_USER_DATA_DIR 覆盖 Electron userData，AppHub 数据直接位于该目录根
+    expect(normalize(info.dataDir)).toBe(normalize(runningApp.userDataDir));
+    expect(normalize(info.defaultDataDir)).toBe(normalize(expectedDefault));
 
-    // 2) 设置页 UI：来源展示 + 按钮禁用 + 固定说明
     await window.getByTestId(TESTID.navSettings).click();
     const source = window.getByTestId(TESTID.dataDirSource);
     await expect(source).toBeVisible({ timeout: TIMEOUTS.ui });
     await expect(source).toHaveText('环境变量固定');
-
     const changeButton = window.getByTestId(TESTID.changeDataDirButton);
     await expect(changeButton).toBeVisible();
     await expect(changeButton).toBeDisabled();
 
-    await expect(window.getByText(/数据目录由环境变量固定/).first()).toBeVisible();
-    await expect(window.getByText(/APPHUB_USER_DATA_DIR/).first()).toBeVisible();
-    await expect(window.getByTestId(TESTID.dataDirDefaultHint)).toContainText(info.defaultDataDir);
+    // Phase 7 文案：env 专属说明同时解释 APPHUB_DATA_DIR / APPHUB_USER_DATA_DIR
+    const envHint = window.getByTestId(TESTID.dataDirEnvHint);
+    await expect(envHint).toBeVisible();
+    await expect(envHint).toContainText('APPHUB_DATA_DIR');
+    await expect(envHint).toContainText('APPHUB_USER_DATA_DIR');
+    await expect(envHint).toContainText(/不影响 Electron 自身的缓存\/配置路径/);
+    await expect(envHint).toContainText(/移除环境变量并重启 App/);
 
-    // 不点击「更改数据目录」：点击会先触发 system.pickDirectory 的原生目录对话框，
-    // Playwright/Electron 均无法自动操作（见 docs/TESTING.md §8.7、§11.5 手工清单）。
+    // 默认目录 hint 在 Phase 7 也会展示 AppHubData 隔离说明
+    await expect(window.getByTestId(TESTID.dataDirDefaultHint)).toContainText(info.defaultDataDir);
+    await expect(window.getByTestId(TESTID.dataDirDefaultHint)).toContainText('AppHubData');
     await expect(window.getByTestId(TESTID.dataDirChangeError)).toHaveCount(0);
   });
 
-  test('默认可编辑模式（--user-data-dir）：source=default、editable=true、展示默认目录为当前使用', async () => {
-    // 用 Chromium 开关隔离 userData，但不设 APPHUB_USER_DATA_DIR ⇒ 可编辑的 default 分支
+  test('env（APPHUB_DATA_DIR）：只改 AppHub 数据目录，默认目录仍为 <userData>/AppHubData', async () => {
+    const appDataDir = await createTempDir('apphub-data-dir-');
+    const runningApp = await launchApp({
+      useUserDataDirArg: true,
+      extraEnv: { APPHUB_DATA_DIR: appDataDir },
+    });
+    try {
+      await waitForShell(runningApp.window);
+      const info = await getSystemInfo(runningApp.window);
+      const expectedDefault = path.join(runningApp.userDataDir, 'AppHubData');
+
+      expect(info.dataDirSource).toBe('env');
+      expect(info.dataDirEditable).toBe(false);
+      expect(normalize(info.dataDir)).toBe(normalize(appDataDir));
+      expect(normalize(info.defaultDataDir)).toBe(normalize(expectedDefault));
+      // APPHUB_DATA_DIR 不改变 Electron userData：AppHub 数据目录与 userData 不同
+      expect(normalize(info.dataDir)).not.toBe(normalize(runningApp.userDataDir));
+      expect((await fs.stat(appDataDir)).isDirectory()).toBe(true);
+
+      await runningApp.window.getByTestId(TESTID.navSettings).click();
+      await expect(runningApp.window.getByTestId(TESTID.dataDirSource)).toHaveText(
+        '环境变量固定',
+        { timeout: TIMEOUTS.ui },
+      );
+      await expect(runningApp.window.getByTestId(TESTID.changeDataDirButton)).toBeDisabled();
+      await expect(runningApp.window.getByTestId(TESTID.dataDirEnvHint)).toContainText(
+        'APPHUB_DATA_DIR',
+      );
+    } finally {
+      await runningApp.close();
+      await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  test('default（--user-data-dir）：dataDir=defaultDataDir=<userData>/AppHubData、editable=true', async () => {
     const runningApp = await launchApp({ useUserDataDirArg: true });
     try {
       await waitForShell(runningApp.window);
       const info = await getSystemInfo(runningApp.window);
-      const expectedUserData = path.resolve(runningApp.userDataDir).toLowerCase();
+      const expectedAppHubData = path.join(runningApp.userDataDir, 'AppHubData');
 
       expect(info.dataDirSource).toBe('default');
       expect(info.dataDirEditable).toBe(true);
-      expect(path.resolve(info.dataDir).toLowerCase()).toBe(expectedUserData);
-      expect(path.resolve(info.defaultDataDir).toLowerCase()).toBe(expectedUserData);
+      expect(normalize(info.dataDir)).toBe(normalize(expectedAppHubData));
+      expect(normalize(info.defaultDataDir)).toBe(normalize(expectedAppHubData));
+      // 默认数据目录位于 userData 下的独立子目录（Phase 7 与 Chromium 缓存隔离）
+      expect(normalize(info.dataDir)).not.toBe(normalize(runningApp.userDataDir));
+      expect((await fs.stat(expectedAppHubData)).isDirectory()).toBe(true);
 
       await runningApp.window.getByTestId(TESTID.navSettings).click();
       await expect(runningApp.window.getByTestId(TESTID.dataDirSource)).toHaveText('默认目录', {
         timeout: TIMEOUTS.ui,
       });
       await expect(runningApp.window.getByTestId(TESTID.changeDataDirButton)).toBeEnabled();
-      await expect(runningApp.window.getByTestId(TESTID.dataDirDefaultHint)).toContainText('当前使用');
-      // env 专属说明不应出现
-      await expect(runningApp.window.getByText(/数据目录由环境变量固定/)).toHaveCount(0);
-      // 数据目录就是 userData：core 初始化后应有 managed 数据（至少 channels.json 所在目录可用）
-      expect((await fs.stat(runningApp.userDataDir)).isDirectory()).toBe(true);
+      const defaultHint = runningApp.window.getByTestId(TESTID.dataDirDefaultHint);
+      await expect(defaultHint).toContainText(info.defaultDataDir);
+      await expect(defaultHint).toContainText('AppHubData');
+      await expect(defaultHint).toContainText(/不会改变 Electron 自身的缓存\/配置路径/);
+      await expect(defaultHint).toContainText(/当前使用/);
+      // 非 env 模式不渲染 env 专属说明
+      await expect(runningApp.window.getByTestId(TESTID.dataDirEnvHint)).toHaveCount(0);
     } finally {
       await runningApp.close();
     }
   });
 
-  test('custom 模式（预置 bootstrap）：source=custom、dataDir=自定义目录、defaultDataDir=userData', async () => {
-    await fs.mkdir(TMP_DIR, { recursive: true });
-    const defaultUserData = await fs.mkdtemp(path.join(TMP_DIR, 'user-data-custom-'));
-    const customDataDir = await fs.mkdtemp(path.join(TMP_DIR, 'custom-data-'));
-    // 引导配置存放在 Electron userData 下（main/data-dir.ts 契约）
+  test('custom（预置 bootstrap）：dataDir=自定义目录、defaultDataDir=<userData>/AppHubData', async () => {
+    const defaultUserData = await createTempDir('user-data-custom-');
+    const customDataDir = await createTempDir('custom-data-');
     await fs.writeFile(
       path.join(defaultUserData, 'apphub-bootstrap.json'),
       `${JSON.stringify({ dataDir: customDataDir }, null, 2)}\n`,
@@ -108,9 +209,9 @@ test.describe('设置页：数据目录（Phase 6）', () => {
       const info = await getSystemInfo(runningApp.window);
       expect(info.dataDirSource).toBe('custom');
       expect(info.dataDirEditable).toBe(true);
-      expect(path.resolve(info.dataDir).toLowerCase()).toBe(path.resolve(customDataDir).toLowerCase());
-      expect(path.resolve(info.defaultDataDir).toLowerCase()).toBe(
-        path.resolve(defaultUserData).toLowerCase(),
+      expect(normalize(info.dataDir)).toBe(normalize(customDataDir));
+      expect(normalize(info.defaultDataDir)).toBe(
+        normalize(path.join(defaultUserData, 'AppHubData')),
       );
 
       await runningApp.window.getByTestId(TESTID.navSettings).click();
@@ -119,13 +220,72 @@ test.describe('设置页：数据目录（Phase 6）', () => {
       });
       await expect(runningApp.window.getByTestId(TESTID.changeDataDirButton)).toBeEnabled();
       await expect(runningApp.window.getByTestId(TESTID.dataDirDefaultHint)).toContainText(
-        defaultUserData,
+        info.defaultDataDir,
       );
-      // core 实际使用的数据目录是 custom dir（ChannelService.list 等可用；这里直接检查目录存在）
       expect((await fs.stat(customDataDir)).isDirectory()).toBe(true);
     } finally {
       await runningApp.close();
       await fs.rm(customDataDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  test('旧版数据自动迁移：userData 根 → <userData>/AppHubData，频道可用且非 managed 文件保留', async () => {
+    const legacyUserData = await createTempDir('user-data-legacy-');
+    const channelId = 'ch_0123456789abcdef0123';
+
+    // Phase 6 及更早：数据直接位于 Electron userData 根
+    await fs.writeFile(
+      path.join(legacyUserData, 'channels.json'),
+      legacyChannelsJson(channelId),
+      'utf8',
+    );
+    await fs.mkdir(path.join(legacyUserData, 'channels', channelId), { recursive: true });
+    await fs.writeFile(
+      path.join(legacyUserData, 'channels', channelId, 'channel.json'),
+      legacyChannelCacheJson(channelId),
+      'utf8',
+    );
+    // 非 managed 文件（模拟 Chromium/用户文件）：迁移不应动它
+    await fs.writeFile(path.join(legacyUserData, 'keep-me.txt'), 'not-managed\n', 'utf8');
+
+    const runningApp = await launchApp({ userDataDir: legacyUserData, useUserDataDirArg: true });
+    try {
+      await waitForShell(runningApp.window);
+      const info = await getSystemInfo(runningApp.window);
+      const appHubData = path.join(legacyUserData, 'AppHubData');
+
+      // 1) 启动后数据目录指向 AppHubData（source 仍为 default）
+      expect(info.dataDirSource).toBe('default');
+      expect(normalize(info.dataDir)).toBe(normalize(appHubData));
+      expect(normalize(info.defaultDataDir)).toBe(normalize(appHubData));
+
+      // 2) 旧 managed 条目已 move 到 AppHubData；根目录不再有 channels.json/channels
+      expect(await pathExists(path.join(appHubData, 'channels.json'))).toBe(true);
+      expect(await pathExists(path.join(appHubData, 'channels', channelId, 'channel.json'))).toBe(
+        true,
+      );
+      expect(await pathExists(path.join(legacyUserData, 'channels.json'))).toBe(false);
+      expect(await pathExists(path.join(legacyUserData, 'channels'))).toBe(false);
+      // 非 managed 文件保留原位
+      expect(await pathExists(path.join(legacyUserData, 'keep-me.txt'))).toBe(true);
+
+      // 3) 迁移后的频道对 core 可用（channels.list 能读到旧记录 + 缓存）
+      const channels = await listChannels(runningApp.window);
+      expect(channels).toHaveLength(1);
+      expect(channels[0]?.id).toBe(channelId);
+      expect(channels[0]?.name).toBe('Legacy Channel');
+
+      // 4) 设置页展示默认目录（AppHubData）且可编辑
+      await runningApp.window.getByTestId(TESTID.navSettings).click();
+      await expect(runningApp.window.getByTestId(TESTID.dataDirSource)).toHaveText('默认目录', {
+        timeout: TIMEOUTS.ui,
+      });
+      await expect(runningApp.window.getByTestId(TESTID.dataDirDefaultHint)).toContainText(
+        'AppHubData',
+      );
+      await expect(runningApp.window.getByTestId(TESTID.dataDirEnvHint)).toHaveCount(0);
+    } finally {
+      await runningApp.close();
     }
   });
 });

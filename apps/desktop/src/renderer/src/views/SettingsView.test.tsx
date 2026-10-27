@@ -23,14 +23,29 @@ describe('设置 / 关于', () => {
     expect(await screen.findByText('0.1.0')).toBeInTheDocument();
     expect(screen.getByText('38.8.6')).toBeInTheDocument();
     expect(screen.getByText('22.20.0')).toBeInTheDocument();
-    expect(screen.getAllByText('C:/Users/test/AppData/Roaming/AppHub').length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText('C:/Users/test/AppData/Roaming/AppHub/AppHubData').length,
+    ).toBeGreaterThan(0);
     expect(screen.getByTestId('data-dir-source')).toHaveTextContent('默认目录');
     expect(screen.getByTestId('data-dir-default-hint')).toHaveTextContent(
-      'C:/Users/test/AppData/Roaming/AppHub',
+      'C:/Users/test/AppData/Roaming/AppHub/AppHubData',
     );
     expect(screen.getByText('去中心化说明')).toBeInTheDocument();
     expect(screen.getByText(/没有中心服务器/)).toBeInTheDocument();
     expect(screen.getByText(/发布权限 = 持有/)).toBeInTheDocument();
+  });
+
+  it('默认目录文案说明 AppHubData 独立子目录且与 Electron 缓存分离', async () => {
+    const api = createMockApi();
+    renderSettings(api);
+
+    await screen.findByText('关于 AppHub');
+    const hint = screen.getByTestId('data-dir-default-hint');
+    expect(hint).toHaveTextContent('默认数据目录');
+    expect(hint).toHaveTextContent('独立子目录');
+    expect(hint).toHaveTextContent('AppHubData');
+    expect(hint).toHaveTextContent('与 Electron/Chromium 的缓存与配置文件分离');
+    expect(hint).toHaveTextContent('修改 AppHub 数据目录不会改变 Electron 自身的缓存/配置路径');
   });
 
   it('点击打开数据目录调用 system.openDataDir', async () => {
@@ -45,26 +60,34 @@ describe('设置 / 关于', () => {
     expect(await screen.findByText(/已在文件管理器中打开数据目录/)).toBeInTheDocument();
   });
 
-  it('env 模式下禁用更改数据目录并说明环境变量固定', async () => {
+  it('env 模式下禁用更改数据目录并说明两个环境变量语义', async () => {
     const api = infoApi({
       dataDirSource: 'env',
       dataDirEditable: false,
       dataDir: 'E:/fixed-apphub-data',
-      defaultDataDir: 'C:/Users/test/AppData/Roaming/AppHub',
+      defaultDataDir: 'C:/Users/test/AppData/Roaming/AppHub/AppHubData',
     });
     renderSettings(api);
 
     await screen.findByText('关于 AppHub');
     expect(screen.getByTestId('data-dir-source')).toHaveTextContent('环境变量固定');
     expect(screen.getByTestId('change-data-dir-button')).toBeDisabled();
-    expect(screen.getAllByText(/APPHUB_USER_DATA_DIR/).length).toBeGreaterThan(0);
+
+    const envHint = screen.getByTestId('data-dir-env-hint');
+    expect(envHint).toHaveTextContent(/APPHUB_DATA_DIR/);
+    expect(envHint).toHaveTextContent(/只修改 AppHub 数据目录/);
+    expect(envHint).toHaveTextContent(/不影响 Electron 自身的缓存\/配置路径/);
+    expect(envHint).toHaveTextContent(/APPHUB_USER_DATA_DIR/);
+    expect(envHint).toHaveTextContent(/整体覆盖 Electron 的 userData 目录/);
+    expect(envHint).toHaveTextContent(/测试\/多实例/);
+    expect(envHint).toHaveTextContent(/移除环境变量并重启 App/);
   });
 
   it('自定义目录来源展示当前目录与默认目录提示', async () => {
     const api = infoApi({
       dataDirSource: 'custom',
       dataDir: 'D:/custom/AppHubData',
-      defaultDataDir: 'C:/Users/test/AppData/Roaming/AppHub',
+      defaultDataDir: 'C:/Users/test/AppData/Roaming/AppHub/AppHubData',
     });
     renderSettings(api);
 
@@ -72,7 +95,7 @@ describe('设置 / 关于', () => {
     expect(screen.getByTestId('data-dir-source')).toHaveTextContent('自定义目录');
     expect(screen.getByText('D:/custom/AppHubData')).toBeInTheDocument();
     expect(screen.getByTestId('data-dir-default-hint')).toHaveTextContent(
-      'C:/Users/test/AppData/Roaming/AppHub',
+      'C:/Users/test/AppData/Roaming/AppHub/AppHubData',
     );
     expect(screen.getByTestId('change-data-dir-button')).toBeEnabled();
   });
@@ -106,6 +129,7 @@ describe('设置 / 关于', () => {
     expect(dialog).toHaveTextContent(NEW_DATA_DIR);
     expect(dialog).toHaveTextContent(/停止本机 Host|关闭本机 Host/);
     expect(dialog).toHaveTextContent(/旧目录不会自动删除/);
+    expect(dialog).toHaveTextContent(/不会改变 Electron 自身的缓存\/配置路径/);
 
     await user.click(screen.getByTestId('change-data-dir-confirm-ok'));
 

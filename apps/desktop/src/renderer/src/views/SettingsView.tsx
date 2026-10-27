@@ -155,6 +155,9 @@ export function SettingsView({ dataVersion }: SettingsViewProps) {
             <p className="field-hint" data-testid="data-dir-default-hint">
               默认数据目录：<code className="break-all">{info.defaultDataDir}</code>
               {info.dataDirSource === 'default' ? '（当前使用）' : ''}
+              <br />
+              默认数据目录是 Electron userData 下的独立子目录 <code>AppHubData</code>，与 Electron/Chromium
+              的缓存与配置文件分离；修改 AppHub 数据目录不会改变 Electron 自身的缓存/配置路径。
             </p>
             <div className="settings-actions">
               <button type="button" className="btn btn-secondary" onClick={() => void openDataDir()}>
@@ -177,10 +180,24 @@ export function SettingsView({ dataVersion }: SettingsViewProps) {
               </button>
             </div>
             {!info.dataDirEditable ? (
-              <InfoBanner tone="info" title="数据目录由环境变量固定">
-                当前数据目录由 <code>APPHUB_USER_DATA_DIR</code>{' '}
-                固定，无法在界面修改；移除该环境变量并重启 App 后即可使用默认/自定义目录。
-              </InfoBanner>
+              <div data-testid="data-dir-env-hint">
+                <InfoBanner tone="info" title="数据目录由环境变量固定">
+                  当前数据目录由环境变量固定，无法在界面修改。两个环境变量的语义不同：
+                  <ul className="env-var-list">
+                    <li>
+                      <code>APPHUB_DATA_DIR</code>：只修改 AppHub 数据目录（默认位于{' '}
+                      <code>&lt;Electron userData&gt;/AppHubData</code>），不影响 Electron
+                      自身的缓存/配置路径；
+                    </li>
+                    <li>
+                      <code>APPHUB_USER_DATA_DIR</code>：整体覆盖 Electron 的 userData
+                      目录（测试/多实例用），AppHub 数据目录默认随之变为{' '}
+                      <code>&lt;userData&gt;/AppHubData</code>。
+                    </li>
+                  </ul>
+                  移除环境变量并重启 App 后即可在界面修改数据目录。
+                </InfoBanner>
+              </div>
             ) : null}
             {changeError ? (
               <div data-testid="data-dir-change-error">
@@ -291,7 +308,8 @@ library/<channelId>/<appId>/install.json`}</pre>
                 <li>迁移前会关闭本机 Host（迁移后可在频道详情重新启动）；</li>
                 <li>频道记录、本地库、加密配置会复制到新目录；</li>
                 <li>复制完成后 App 会自动重启使新目录生效；</li>
-                <li>旧目录不会自动删除，确认迁移成功后可以手动清理。</li>
+                <li>旧目录不会自动删除，确认迁移成功后可以手动清理；</li>
+                <li>修改 AppHub 数据目录不会改变 Electron 自身的缓存/配置路径。</li>
               </ul>
             </>
           }
