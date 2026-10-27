@@ -178,7 +178,9 @@ describe('本地文件与状态基础设施', () => {
   });
 
   it('safeJoin 阻止路径逃逸与绝对路径', () => {
-    const root = path.join('C:', 'data', 'apphub');
+    // 使用与平台无关的绝对路径根（Windows 的 C:\... 在 Linux 上不是绝对路径，
+    // 会导致该用例在 Linux CI 上失败）。
+    const root = path.resolve('apphub-safejoin-root');
     expect(safeJoin(root, 'a/b.txt')).toBe(path.join(root, 'a', 'b.txt'));
     expect(() => safeJoin(root, '../evil.txt')).toThrow(AppError);
     expect(() => safeJoin(root, 'a/../../evil.txt')).toThrow(AppError);

@@ -1,15 +1,19 @@
 import { AppError } from '@apphub/protocol';
 import { describe, expect, it } from 'vitest';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { fileUrlToLocalPath, createSenderPolicy, assertTrustedSender } from './sender';
 
-const APP_INDEX = 'C:\\apphub\\out\\renderer\\index.html';
+// 使用平台无关的绝对路径构造 fixture：Windows 的 `C:\...` 在 Linux 上不是绝对路径，
+// 直接写死会导致 CI（Linux）上的断言失败。
+const APP_INDEX = path.resolve('apphub-test-out', 'renderer', 'index.html');
 
 function prodPolicy() {
   return createSenderPolicy({ appIndexFile: APP_INDEX });
 }
 
 function fileUrl(filePath: string): string {
-  return `file:///${filePath.replace(/\\/g, '/')}`;
+  return pathToFileURL(path.resolve(filePath)).href;
 }
 
 describe('sender：生产模式（file://）', () => {
@@ -23,9 +27,9 @@ describe('sender：生产模式（file://）', () => {
 
   it('拒绝其他 file:// 页面（例如被替换的恶意页面）', () => {
     const policy = prodPolicy();
-    expect(policy.isAllowed(fileUrl('C:\\apphub\\out\\renderer\\evil.html'))).toBe(false);
-    expect(policy.isAllowed(fileUrl('C:\\Windows\\System32\\cmd.exe'))).toBe(false);
-    expect(policy.isAllowed('file:///C:/apphub/out/renderer/index.html.bak')).toBe(false);
+    expect(policy.isAllowed(fileUrl(path.resolve('apphub-test-out', 'renderer', 'evil.html')))).toBe(false);
+    expect(policy.isAllowed(fileUrl(path.resolve('evil.exe')))).toBe(false);
+    expect(policy.isAllowed(`${fileUrl(APP_INDEX)}.bak`)).toBe(false);
   });
 
   it('拒绝非 file 协议与空/非法 URL', () => {
@@ -40,7 +44,9 @@ describe('sender：生产模式（file://）', () => {
   });
 
   it('fileUrlToLocalPath 只接受 file: 协议', () => {
-    expect(fileUrlToLocalPath(fileUrl(APP_INDEX))?.toLowerCase()).toBe(APP_INDEX.toLowerCase());
+    const local = fileUrlToLocalPath(fileUrl(APP_INDEX));
+    expect(local).not.toBeNull();
+    expect(path.resolve(local as string)).toBe(path.resolve(APP_INDEX));
     expect(fileUrlToLocalPath('https://example.com/a')).toBeNull();
     expect(fileUrlToLocalPath('::::')).toBeNull();
   });
