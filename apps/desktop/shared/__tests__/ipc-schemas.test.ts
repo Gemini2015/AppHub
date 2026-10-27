@@ -4,6 +4,7 @@ import {
   ChannelIdRequestSchema,
   CreateChannelRequestSchema,
   EmptySchema,
+  HostUpdateConfigRequestSchema,
   InstallRequestSchema,
   PickRequestSchema,
   PublishRequestSchema,
@@ -132,5 +133,63 @@ describe('ipc-schemas：协议字段校验', () => {
 
   it('PickRequestSchema 缺省 kind 为 files', () => {
     expect(PickRequestSchema.parse({})).toEqual({ kind: 'files' });
+  });
+});
+
+describe('ipc-schemas：本机 Host 配置', () => {
+  const shape = (patch: unknown) => ({ channelId: validChannelId, patch });
+
+  it('接受合法 patch（空 patch / 端口 / 监听范围 / advertiseHost / publicBaseUrl）', () => {
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({})).success).toBe(true);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ port: 8787 })).success).toBe(true);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ port: 65535 })).success).toBe(true);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ bindHost: '0.0.0.0' })).success).toBe(true);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ bindHost: '127.0.0.1' })).success).toBe(true);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ advertiseHost: '192.168.1.10' })).success).toBe(true);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ advertiseHost: 'apphub.local' })).success).toBe(true);
+    expect(
+      HostUpdateConfigRequestSchema.safeParse(shape({ publicBaseUrl: 'http://192.168.1.10:8787/' })).success,
+    ).toBe(true);
+  });
+
+  it('允许用空字符串清除可选字段（advertiseHost / publicBaseUrl → core 视为清除）', () => {
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ advertiseHost: '' })).success).toBe(true);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ publicBaseUrl: '' })).success).toBe(true);
+    expect(
+      HostUpdateConfigRequestSchema.safeParse(shape({ advertiseHost: '', publicBaseUrl: '', port: 8787 })).success,
+    ).toBe(true);
+    // 仅这两个可选字段支持清除语义，其它字段不允许空串
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ bindHost: '' })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse({ channelId: '', patch: {} }).success).toBe(false);
+  });
+
+  it('拒绝非法端口（0 / 70000 / 小数）', () => {
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ port: 0 })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ port: 70000 })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ port: 1.5 })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ port: '8787' })).success).toBe(false);
+  });
+
+  it('拒绝带协议/端口/路径的 advertiseHost、纯空白与非法 bindHost', () => {
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ advertiseHost: 'http://evil.example' })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ advertiseHost: 'host:8080' })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ advertiseHost: 'host/path' })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ advertiseHost: '   ' })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ bindHost: '192.168.1.2' })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ bindHost: 'localhost' })).success).toBe(false);
+  });
+
+  it('拒绝非 http(s) publicBaseUrl / rootDir 变更 / 多余字段', () => {
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ publicBaseUrl: 'ftp://example.com/' })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ publicBaseUrl: 'not-a-url' })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ publicBaseUrl: 123 })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse(shape({ rootDir: '/tmp/repo' })).success).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse({ channelId: validChannelId, patch: {}, extra: 1 }).success).toBe(
+      false,
+    );
+    expect(
+      HostUpdateConfigRequestSchema.safeParse({ channelId: validChannelId, patch: { unknown: 1 } }).success,
+    ).toBe(false);
+    expect(HostUpdateConfigRequestSchema.safeParse({ channelId: 'bad', patch: {} }).success).toBe(false);
   });
 });

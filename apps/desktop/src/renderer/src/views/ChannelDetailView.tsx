@@ -3,6 +3,7 @@ import { useApi } from '../api';
 import { copyText } from '../clipboard';
 import { PlatformBadges, PublishModeBadge, RoleBadge, VisibilityBadge } from '../components/Badges';
 import { ApiErrorBanner, InfoBanner } from '../components/Form';
+import { HostPanel } from '../components/HostPanel';
 import { Icon } from '../components/Icon';
 import { ConfirmDialog } from '../components/Modal';
 import { EmptyState, ErrorState, LoadingState, PageHeader, Section } from '../components/StateViews';
@@ -302,6 +303,15 @@ export function ChannelDetailView({
 
         {state.error ? <ApiErrorBanner error={state.error} title="刷新频道信息失败" /> : null}
       </div>
+
+      {/* 本机 Host 面板：订阅者看不到（local-host 频道的托管/管理只有 owner/admin 可用）。 */}
+      {summary.role !== 'subscriber' ? (
+        <HostPanel
+          channelId={channelId}
+          dataVersion={dataVersion}
+          onChanged={onChannelsChanged}
+        />
+      ) : null}
 
       <Section
         title="App 列表"

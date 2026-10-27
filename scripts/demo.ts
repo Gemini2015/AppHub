@@ -10,7 +10,8 @@
  *  4. 发布 App（zip 模式）；
  *  5. 以"另一台机器"的身份（独立 dataDir）通过 HTTP 订阅频道；
  *  6. 安装、更新（验证只下载变化文件）、校验、启动描述、卸载；
- *  7. 结束时清理环境（--keep 保留临时目录便于查看产物）。
+ *  7. 本机 Host（local-host）：内置 Host 托管本地目录 → 订阅 → 安装 → 启停验证；
+ *  8. 结束时清理环境（--keep 保留临时目录便于查看产物）。
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -22,6 +23,7 @@ import type { FtpHttpStorageConfig } from '@apphub/protocol';
 import {
   createFakeSecretBox,
   createTempDir,
+  getFreePort,
   safeRemove,
   startFtpTestServer,
   startStaticServer,
@@ -250,8 +252,73 @@ async function main(): Promise<void> {
     const installedFiles = await listFilesRecursive(zipInstall.app.installPath);
     ok(`zip 解压文件：${installedFiles.join(', ')}`);
 
+    // ---------------------------------------------------------------- 本机 Host
+    heading('7. 本机 Host（local-host）：无需外部服务器的频道分享');
+    const hostRepoDir = path.join(root, 'host_repo');
+    await fs.mkdir(hostRepoDir, { recursive: true });
+    const hostPort = await getFreePort();
+    const hostChannel: ChannelDetail = await owner.channels.create({
+      name: 'local-host-demo',
+      description: 'AppHub 内置 Host 演示频道',
+      visibility: 'public',
+      owner: { name: 'Demo Owner' },
+      storage: {
+        provider: 'local-host',
+        rootDir: hostRepoDir,
+        port: hostPort,
+        bindHost: '0.0.0.0',
+        advertiseHost: '127.0.0.1',
+      },
+    });
+    const hostStarted = await owner.host.start(hostChannel.id);
+    ok(`Host 已启动：${hostStarted.urls.channelUrl}`);
+    info(`监听范围：${hostStarted.bindHost}:${hostStarted.port}（默认局域网可访问，演示固定 127.0.0.1 便于验证）`);
+
+    const hostAppDir = path.join(srcDir, 'hostapp');
+    await writeFileTree(hostAppDir, [
+      { path: 'hostapp.exe', content: 'hostapp v1.0.0 binary\n' },
+      { path: 'readme.txt', content: 'served by AppHub built-in host\n' },
+    ]);
+    await owner.publishing.publish({
+      channelId: hostChannel.id,
+      app: { appId: 'hostapp', displayName: 'HostApp', description: '由本机 Host 提供下载', author: 'Demo' },
+      version: '1.0.0',
+      platform: 'windows',
+      publishMode: 'files',
+      entry: 'hostapp.exe',
+      changelog: '本机 Host 首个版本',
+      files: [
+        { sourcePath: path.join(hostAppDir, 'hostapp.exe'), targetPath: 'hostapp.exe', executable: true },
+        { sourcePath: path.join(hostAppDir, 'readme.txt'), targetPath: 'readme.txt' },
+      ],
+    });
+    await subscriber.channels.subscribe({ url: hostStarted.urls.channelUrl });
+    const hostInstall = await subscriber.library.install({ channelId: hostChannel.id, appId: 'hostapp' });
+    ok(`订阅者经内置 Host 安装成功：${hostInstall.app.displayName}@${hostInstall.app.version}`);
+    const hostVerify = await subscriber.library.verify(hostChannel.id, 'hostapp');
+    if (!hostVerify.ok) throw new Error('本机 Host App 校验失败');
+
+    const stopped = await owner.host.stop(hostChannel.id);
+    let reachableAfterStop = true;
+    try {
+      const response = await fetch(stopped.urls.channelUrl, { signal: AbortSignal.timeout(3000) });
+      reachableAfterStop = response.ok;
+    } catch {
+      reachableAfterStop = false;
+    }
+    if (reachableAfterStop) throw new Error('停止 Host 后订阅链接仍可访问（端口可能未释放）');
+    ok('停止 Host 后端口已释放，订阅链接不可访问（符合预期）');
+
+    const restarted = await owner.host.start(hostChannel.id);
+    const restartedResponse = await fetch(restarted.urls.channelUrl, { signal: AbortSignal.timeout(3000) });
+    if (!restartedResponse.ok) {
+      throw new Error(`重新启动 Host 后订阅链接不可用：HTTP ${restartedResponse.status}`);
+    }
+    ok('重新启动 Host 后订阅链接恢复可访问');
+    await owner.host.stop(hostChannel.id);
+
     // ---------------------------------------------------------------- 汇总
-    heading('7. 本地库与卸载');
+    heading('8. 本地库与卸载');
     const library = await subscriber.library.list();
     info(`已安装 ${library.length} 个 App：${library.map((app) => `${app.displayName}@${app.version}`).join(', ')}`);
     await subscriber.library.uninstall(created.id, 'packtool');
@@ -265,9 +332,11 @@ async function main(): Promise<void> {
     heading('演示完成 ✅');
     console.log(`
   结果概览：
-    · 频道: example (${created.id})
+    · 频道: example (${created.id})（ftp-http）
+    · 频道: local-host-demo (${hostChannel.id})（AppHub 内置 Host）
     · App: foobar（散文件，1.0.0→1.0.1→1.0.2，差量更新）
     · App: packtool（zip 发布、安装、卸载）
+    · App: hostapp（本机 Host 托管、订阅安装、启停验证）
     · 订阅者本地库: ${afterUninstall.length} 个 App
     · 产物目录: ${repoDir}
 `);

@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { ChannelDetailView } from './ChannelDetailView';
 import {
   CHANNEL_ID,
+  HOST_LAN_URL,
   SUBSCRIBE_URL,
   createMockApi,
   makeChannelDetail,
   makeChannelSummary,
+  makeRunningHostStatus,
   ok,
 } from '../../test/mock-api';
 import { renderWithApi, screen, userEvent, waitFor, within } from '../../test/render';
@@ -107,5 +109,34 @@ describe('频道详情', () => {
 
     await waitFor(() => expect(api.channels.unsubscribe).toHaveBeenCalledWith(CHANNEL_ID));
     await waitFor(() => expect(onBack).toHaveBeenCalled());
+  });
+
+  it('owner 的 local-host 频道展示本机 Host 面板与运行状态', async () => {
+    const api = createMockApi({
+      host: { status: vi.fn().mockResolvedValue(ok(makeRunningHostStatus())) },
+    });
+    renderChannelDetail(api);
+
+    await screen.findByTestId('channel-detail');
+    const panel = await screen.findByTestId('host-panel');
+    expect(panel).toBeInTheDocument();
+    expect(api.host.status).toHaveBeenCalledWith(CHANNEL_ID);
+    expect(screen.getByTestId('host-status')).toHaveTextContent('运行中');
+    expect(screen.getByTestId('host-url')).toHaveTextContent(HOST_LAN_URL);
+  });
+
+  it('订阅者不查询也不展示 Host 面板', async () => {
+    const detail = makeChannelDetail({
+      summary: makeChannelSummary({ role: 'subscriber', source: 'subscribed', canPublish: false }),
+    });
+    const api = createMockApi({
+      channels: { get: vi.fn().mockResolvedValue(ok(detail)) },
+      host: { status: vi.fn().mockResolvedValue(ok(makeRunningHostStatus())) },
+    });
+    renderChannelDetail(api);
+
+    await screen.findByTestId('channel-detail');
+    expect(screen.queryByTestId('host-panel')).not.toBeInTheDocument();
+    expect(api.host.status).not.toHaveBeenCalled();
   });
 });

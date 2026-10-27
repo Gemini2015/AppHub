@@ -94,6 +94,17 @@ export function installStatusLabel(status: string): string {
   }
 }
 
+export function hostStatusLabel(running: boolean): string {
+  return running ? 'Host 运行中' : 'Host 已停止';
+}
+
+/** Host 监听范围的中文说明。 */
+export function bindHostLabel(bindHost: string): string {
+  if (bindHost === '0.0.0.0') return '局域网可访问（0.0.0.0）';
+  if (bindHost === '127.0.0.1' || bindHost === 'localhost') return '仅本机（127.0.0.1）';
+  return bindHost;
+}
+
 export function progressOperationLabel(operation: string): string {
   switch (operation) {
     case 'publish':

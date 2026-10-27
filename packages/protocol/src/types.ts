@@ -9,6 +9,7 @@ import type {
   FileEntrySchema,
   FilesFileSchema,
   LocalStorageConfigSchema,
+  LocalHostStorageConfigSchema,
   FtpHttpStorageConfigSchema,
   S3StorageConfigSchema,
   StorageConfigSchema,
@@ -31,6 +32,7 @@ export type ChannelFile = z.infer<typeof ChannelFileSchema>;
 export type ChannelPrivateFile = z.infer<typeof ChannelPrivateFileSchema>;
 
 export type LocalStorageConfig = z.infer<typeof LocalStorageConfigSchema>;
+export type LocalHostStorageConfig = z.infer<typeof LocalHostStorageConfigSchema>;
 export type FtpHttpStorageConfig = z.infer<typeof FtpHttpStorageConfigSchema>;
 export type S3StorageConfig = z.infer<typeof S3StorageConfigSchema>;
 export type StorageConfig = z.infer<typeof StorageConfigSchema>;

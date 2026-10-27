@@ -168,4 +168,49 @@ describe('core-manager：core 惰性初始化', () => {
     await manager.getCore();
     await expect(manager.close()).resolves.toBeUndefined();
   });
+
+  it('close 时先停止本机 Host（stopAll）再关闭 core', async () => {
+    const stopAll = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const fakeCore = {
+      dataDir: tempDir,
+      host: { stopAll },
+      close,
+    } as unknown as AppHubCore;
+    const manager = new CoreManager({
+      dataDir: tempDir,
+      logger: createFakeLogger(),
+      secretBox: fakeSecretBox(),
+      createCore: () => fakeCore,
+    });
+    await manager.getCore();
+    await manager.close();
+    expect(stopAll).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(stopAll.mock.invocationCallOrder[0]).toBeLessThan(close.mock.invocationCallOrder[0]);
+  });
+
+  it('stopAll 抛错时仍继续关闭 core（退出流程不阻塞）', async () => {
+    const close = vi.fn(async () => undefined);
+    const fakeCore = {
+      dataDir: tempDir,
+      host: {
+        stopAll: vi.fn(async () => {
+          throw new Error('端口已释放');
+        }),
+      },
+      close,
+    } as unknown as AppHubCore;
+    const logger = createFakeLogger();
+    const manager = new CoreManager({
+      dataDir: tempDir,
+      logger,
+      secretBox: fakeSecretBox(),
+      createCore: () => fakeCore,
+    });
+    await manager.getCore();
+    await expect(manager.close()).resolves.toBeUndefined();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(logger.entries.some((entry) => entry.level === 'warn')).toBe(true);
+  });
 });

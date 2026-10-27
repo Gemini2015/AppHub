@@ -9,6 +9,7 @@ import type {
   ChannelSummaryDTO,
   DataChangedEventDTO,
   ExportPrivateConfigResultDTO,
+  HostStatusDTO,
   InspectSelectionResultDTO,
   InstallRequestDTO,
   InstallResultDTO,
@@ -26,6 +27,7 @@ import type {
   UpdateAppMetaRequestDTO,
   UpdateChannelRequestDTO,
   UpdateCheckDTO,
+  UpdateHostConfigRequestDTO,
   VerifyRequestDTO,
   VerifyResultDTO,
 } from '../../shared/ipc';
@@ -61,6 +63,7 @@ const api: AppHubApi = {
   system: {
     info: () => invoke<SystemInfoDTO>(IPC_CHANNELS.systemInfo),
     openDataDir: () => invoke<void>(IPC_CHANNELS.systemOpenDataDir),
+    pickDirectory: () => invoke<string | null>(IPC_CHANNELS.systemPickDirectory),
   },
   channels: {
     list: () => invoke<ChannelSummaryDTO[]>(IPC_CHANNELS.channelsList),
@@ -84,6 +87,14 @@ const api: AppHubApi = {
     // 渲染进程侧是 (channelId, appId) 两参，主进程用 AppRefRequestSchema 校验对象
     get: (channelId: string, appId: string) =>
       invoke<AppDetailDTO>(IPC_CHANNELS.appsGet, { channelId, appId }),
+  },
+  host: {
+    start: (channelId: string) => invoke<HostStatusDTO>(IPC_CHANNELS.hostStart, { channelId }),
+    stop: (channelId: string) => invoke<HostStatusDTO>(IPC_CHANNELS.hostStop, { channelId }),
+    status: (channelId: string) => invoke<HostStatusDTO>(IPC_CHANNELS.hostStatus, { channelId }),
+    list: () => invoke<HostStatusDTO[]>(IPC_CHANNELS.hostList),
+    updateConfig: (input: UpdateHostConfigRequestDTO) =>
+      invoke<HostStatusDTO>(IPC_CHANNELS.hostUpdateConfig, input),
   },
   publish: {
     pick: (kind: PickKind) => invoke<PublishSelectionDTO | null>(IPC_CHANNELS.publishPick, { kind }),

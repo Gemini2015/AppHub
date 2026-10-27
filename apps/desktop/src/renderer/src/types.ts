@@ -26,6 +26,9 @@ export type {
   CreateChannelRequestDTO,
   DataChangedEventDTO,
   ExportPrivateConfigResultDTO,
+  HostConfigPatchDTO,
+  HostStatusDTO,
+  HostUrlsDTO,
   InstalledAppDTO,
   InstallRequestDTO,
   InstallResultDTO,
@@ -43,6 +46,7 @@ export type {
   UpdateAppMetaRequestDTO,
   UpdateCheckDTO,
   UpdateChannelRequestDTO,
+  UpdateHostConfigRequestDTO,
   VerifyRequestDTO,
   VerifyResultDTO,
 } from '../../../shared/ipc';
@@ -60,6 +64,10 @@ export type PublishMode = AppSummaryDTO['publishMode'];
 /** 存储 provider 配置联合类型。 */
 export type StorageConfig = CreateChannelRequestDTO['storage'];
 export type StorageProvider = StorageConfig['provider'];
+/** 本机 Host 存储配置（provider = local-host）。 */
+export type LocalHostStorageConfig = Extract<StorageConfig, { provider: 'local-host' }>;
+/** Host 监听范围：0.0.0.0（局域网）/ 127.0.0.1（仅本机）。 */
+export type BindHost = LocalHostStorageConfig['bindHost'];
 
 /** 远端 channel.json 内容。 */
 export type ChannelFile = ChannelDetailDTO['channel'];

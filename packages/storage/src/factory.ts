@@ -1,6 +1,7 @@
 import { AppError } from '@apphub/protocol';
 import type { StorageConfig } from '@apphub/protocol';
 import { FtpHttpStorageAdapter } from './adapters/ftp-http';
+import { LocalHostStorageAdapter } from './adapters/local-host';
 import { LocalStorageAdapter } from './adapters/local';
 import { S3StorageAdapter } from './adapters/s3';
 import type { StorageAdapter, StorageFactory } from './types';
@@ -20,6 +21,9 @@ export function createStorageAdapter(config: StorageConfig): StorageAdapter {
   switch (config.provider) {
     case 'local':
       return new LocalStorageAdapter(config);
+    case 'local-host':
+      // 本机 Host：本地目录读写 + 由本机网卡/端口推导公开下载地址（不绑定端口）
+      return new LocalHostStorageAdapter(config);
     case 'ftp-http':
       return new FtpHttpStorageAdapter(config);
     case 's3':

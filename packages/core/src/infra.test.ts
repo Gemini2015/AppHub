@@ -187,6 +187,28 @@ describe('本地文件与状态基础设施', () => {
     expect(() => safeJoin(root, '\\\\server\\share\\evil')).toThrow(AppError);
   });
 
+  it('writeFileAtomic 在目标文件短暂被占用时重试成功（Windows EPERM/EBUSY 兼容）', async () => {
+    const dir = await tempDir();
+    const filePath = path.join(dir, 'atomic.json');
+    await writeJsonAtomic(filePath, { version: 1 });
+
+    // 持有目标文件句柄期间尝试原子替换：Windows 上可能返回 EPERM/EBUSY，
+    // writeFileAtomic 应重试；句柄释放后成功（其它平台会直接成功，同样通过）。
+    const handle = await fs.open(filePath, 'r');
+    const pending = writeJsonAtomic(filePath, { version: 2 });
+    const observed = pending.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await sleep(50);
+    await handle.close();
+    const outcome = await observed;
+    expect(outcome).toBeUndefined();
+    expect(await readJsonFile<{ version: number }>(filePath, 'atomic.json')).toEqual({
+      version: 2,
+    });
+  });
+
   it('hashFile 计算 size+MD5（流式）', async () => {
     const dir = await tempDir();
     const filePath = path.join(dir, 'blob.bin');

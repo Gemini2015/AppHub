@@ -32,3 +32,14 @@ export class KeyedMutex {
     return [...this.tails.keys()];
   }
 }
+
+/**
+ * 频道级写锁 key：同一频道的 channel.json "读取-合并-写回" 必须串行
+ * （docs/ARCHITECTURE.md §7：同一频道/App 的发布串行化）。
+ *
+ * 发布（publish）、元信息修改（updateMeta）、频道信息修改（channels.update）
+ * 都必须使用同一个 key，否则并发合并会丢失 App 或互相覆盖。
+ */
+export function channelWriteLockKey(channelId: string): string {
+  return `channel-write:${channelId}`;
+}

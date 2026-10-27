@@ -24,6 +24,7 @@ import type { ChannelAccess } from './channel-access';
 import type { ChannelAccessDeps } from './channel-access';
 import { ChannelAccess as ChannelAccessImpl } from './channel-access';
 import type { HttpClient } from './http';
+import { channelWriteLockKey } from './mutex';
 import type { KeyedMutex } from './mutex';
 import type { StateStore } from './state';
 import type {
@@ -68,6 +69,8 @@ export interface ChannelServiceDeps {
   logger?: Logger;
   mutex: KeyedMutex;
   ready: Promise<void>;
+  /** 频道本地记录被删除后的 best-effort 清理（例如停止本机 Host）。 */
+  onChannelRemoved?: (channelId: string) => Promise<void> | void;
 }
 
 function asString(value: unknown): string {
@@ -290,41 +293,46 @@ export class ChannelServiceImpl implements ChannelService {
 
   async update(channelId: string, patch: ChannelUpdateInput): Promise<ChannelDetail> {
     await this.deps.ready;
-    const record = await this.requireRecord(channelId);
-    if (record.role === 'subscriber') {
-      throw new AppError('AUTH', '订阅者不能修改频道信息');
-    }
-    const access = await this.openAccess(record);
-    try {
-      const remote = await access.readChannelRemote();
-      const nowIso = this.deps.clock.now().toISOString();
-      const updated: ChannelFile = {
-        ...remote,
-        name: patch.name === undefined ? remote.name : validateName(patch.name),
-        description:
-          patch.description === undefined ? remote.description : validateDescription(patch.description),
-        owner: patch.owner === undefined ? remote.owner : validateOwner(patch.owner),
-        updatedAt: nowIso,
-      };
-      if (updated.visibility === 'private' && updated.access?.type !== 'secret-url') {
-        updated.access = { type: 'secret-url' };
+    // 与 publish/updateMeta 共用频道级锁：channel.json 的读取-合并-写回必须串行。
+    return this.deps.mutex.runExclusive(channelWriteLockKey(channelId), async () => {
+      const record = await this.requireRecord(channelId);
+      if (record.role === 'subscriber') {
+        throw new AppError('AUTH', '订阅者不能修改频道信息');
       }
-      await access.writeChannelRemote(updated);
-      const pri = await this.deps.state.readPrivateConfig(channelId);
-      if (pri) {
-        await this.deps.state.writePrivateConfig({
-          ...pri,
-          channelName: updated.name,
-          owner: updated.owner,
+      const access = await this.openAccess(record);
+      try {
+        const remote = await access.readChannelRemote();
+        const nowIso = this.deps.clock.now().toISOString();
+        const updated: ChannelFile = {
+          ...remote,
+          name: patch.name === undefined ? remote.name : validateName(patch.name),
+          description:
+            patch.description === undefined
+              ? remote.description
+              : validateDescription(patch.description),
+          owner: patch.owner === undefined ? remote.owner : validateOwner(patch.owner),
           updatedAt: nowIso,
-        });
+        };
+        if (updated.visibility === 'private' && updated.access?.type !== 'secret-url') {
+          updated.access = { type: 'secret-url' };
+        }
+        await access.writeChannelRemote(updated);
+        const pri = await this.deps.state.readPrivateConfig(channelId);
+        if (pri) {
+          await this.deps.state.writePrivateConfig({
+            ...pri,
+            channelName: updated.name,
+            owner: updated.owner,
+            updatedAt: nowIso,
+          });
+        }
+        const updatedRecord = await this.storeChannelSnapshot(record, updated);
+        this.deps.logger?.info('已更新频道信息', { channelId });
+        return this.buildDetail(updatedRecord, updated);
+      } finally {
+        await access.close();
       }
-      const updatedRecord = await this.storeChannelSnapshot(record, updated);
-      this.deps.logger?.info('已更新频道信息', { channelId });
-      return this.buildDetail(updatedRecord, updated);
-    } finally {
-      await access.close();
-    }
+    });
   }
 
   async subscribe(input: SubscribeInput): Promise<ChannelDetail> {
@@ -389,6 +397,16 @@ export class ChannelServiceImpl implements ChannelService {
     const record = await this.requireRecord(channelId);
     await this.deps.state.removeChannelRecord(record.channelId);
     await this.deps.state.dropChannelCache(record.channelId);
+    if (this.deps.onChannelRemoved) {
+      try {
+        await this.deps.onChannelRemoved(record.channelId);
+      } catch (error) {
+        this.deps.logger?.warn('频道删除后的关联资源清理失败', {
+          channelId: record.channelId,
+          reason: AppError.from(error).message,
+        });
+      }
+    }
     this.deps.logger?.info('已取消订阅频道', { channelId });
   }
 

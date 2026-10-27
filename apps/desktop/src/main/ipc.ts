@@ -5,6 +5,8 @@ import type {
   AppInfo,
   ChannelDetail,
   ChannelInfo,
+  HostConfigPatch,
+  HostStatus,
   InstallResult,
   InstalledAppInfo,
   PublishAppInput,
@@ -27,10 +29,12 @@ import {
   type ChannelSummaryDTO,
   type DataChangedEventDTO,
   type ExportPrivateConfigResultDTO,
+  type HostStatusDTO,
   type InspectSelectionResultDTO,
   type InstallRequestDTO,
   type InstallResultDTO,
   type InstalledAppDTO,
+  type IpcChannel,
   type LaunchResultDTO,
   type ProgressEventDTO,
   type ProgressOperation,
@@ -49,6 +53,7 @@ import {
   CreateChannelRequestSchema,
   EmptySchema,
   ExportPrivateConfigRequestSchema,
+  HostUpdateConfigRequestSchema,
   InspectSelectionRequestSchema,
   InstallRequestSchema,
   PickRequestSchema,
@@ -256,6 +261,29 @@ export function toPublishResult(result: PublishResult): PublishResultDTO {
     archive: result.archive,
     channelUpdatedAt: result.channelUpdatedAt,
   };
+}
+
+/** core.HostStatus -> HostStatusDTO（lastError 归一为可跨 IPC 的 ApiError 结构）。 */
+export function toHostStatus(status: HostStatus): HostStatusDTO {
+  const dto: HostStatusDTO = {
+    channelId: status.channelId,
+    channelName: status.channelName,
+    visibility: status.visibility,
+    running: status.running,
+    configuredPort: status.configuredPort,
+    port: status.port,
+    bindHost: status.bindHost,
+    urls: {
+      channelUrl: status.urls.channelUrl,
+      localChannelUrl: status.urls.localChannelUrl,
+      lanChannelUrls: [...status.urls.lanChannelUrls],
+    },
+  };
+  if (status.startedAt !== undefined) dto.startedAt = status.startedAt;
+  if (status.lastError) {
+    dto.lastError = { code: status.lastError.code, message: status.lastError.message };
+  }
+  return dto;
 }
 
 /**
@@ -470,8 +498,10 @@ export function createIpcRouter(ctx: IpcRouterContext): Record<string, IpcHandle
   const StrictInspectRequestSchema = InspectSelectionRequestSchema.strict();
   const StrictAppRefRequestSchema = AppRefRequestSchema.strict();
   const StrictVerifyRequestSchema = VerifyRequestSchema.strict();
+  const StrictChannelIdRequestSchema = ChannelIdRequestSchema.strict();
+  const StrictHostUpdateConfigRequestSchema = HostUpdateConfigRequestSchema.strict();
 
-  const handlers: Record<string, IpcHandler> = {
+  const handlers: Record<IpcChannel, IpcHandler> = {
     // -----------------------------------------------------------------------
     // system
     // -----------------------------------------------------------------------
@@ -493,6 +523,15 @@ export function createIpcRouter(ctx: IpcRouterContext): Record<string, IpcHandle
       if (typeof opened === 'string' && opened.length > 0) {
         throw new AppError('IO', `无法打开数据目录：${opened}`);
       }
+    }),
+
+    [IPC_CHANNELS.systemPickDirectory]: handle(IPC_CHANNELS.systemPickDirectory, EmptySchema, async () => {
+      const result = await dialog.showOpenDialog({
+        title: '选择频道本地存储目录',
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      if (result.canceled) return null;
+      return result.filePaths?.[0] ?? null;
     }),
 
     // -----------------------------------------------------------------------
@@ -608,6 +647,50 @@ export function createIpcRouter(ctx: IpcRouterContext): Record<string, IpcHandle
         const core = await getCore();
         const url = await core.channels.getSubscribeUrl(payload.channelId);
         return { url } satisfies SubscribeUrlDTO;
+      },
+    ),
+
+    // -----------------------------------------------------------------------
+    // host（本机 Host：local-host 频道仓库的启停/状态/配置）
+    // -----------------------------------------------------------------------
+    [IPC_CHANNELS.hostStart]: handle(IPC_CHANNELS.hostStart, StrictChannelIdRequestSchema, async (payload) => {
+      const core = await getCore();
+      const status = await core.host.start(payload.channelId);
+      const dto = toHostStatus(status);
+      broadcastDataChanged({ domain: 'host', channelId: dto.channelId });
+      return dto;
+    }),
+
+    [IPC_CHANNELS.hostStop]: handle(IPC_CHANNELS.hostStop, StrictChannelIdRequestSchema, async (payload) => {
+      const core = await getCore();
+      const status = await core.host.stop(payload.channelId);
+      const dto = toHostStatus(status);
+      broadcastDataChanged({ domain: 'host', channelId: dto.channelId });
+      return dto;
+    }),
+
+    [IPC_CHANNELS.hostStatus]: handle(IPC_CHANNELS.hostStatus, StrictChannelIdRequestSchema, async (payload) => {
+      const core = await getCore();
+      const status = await core.host.status(payload.channelId);
+      return toHostStatus(status);
+    }),
+
+    [IPC_CHANNELS.hostList]: handle(IPC_CHANNELS.hostList, EmptySchema, async () => {
+      const core = await getCore();
+      const statuses = await core.host.list();
+      return statuses.map(toHostStatus);
+    }),
+
+    [IPC_CHANNELS.hostUpdateConfig]: handle(
+      IPC_CHANNELS.hostUpdateConfig,
+      StrictHostUpdateConfigRequestSchema,
+      async (payload) => {
+        const core = await getCore();
+        const patch: HostConfigPatch = payload.patch;
+        const status = await core.host.updateConfig(payload.channelId, patch);
+        const dto = toHostStatus(status);
+        broadcastDataChanged({ domain: 'host', channelId: dto.channelId });
+        return dto;
       },
     ),
 
@@ -760,18 +843,15 @@ export function createIpcRouter(ctx: IpcRouterContext): Record<string, IpcHandle
     }),
   };
 
-  // 编译期保证 IPC_CHANNELS 全覆盖（缺一个会在这里报 TS 错误）
-  const coverage: Record<(typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS], IpcHandler> = handlers as Record<
-    (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS],
-    IpcHandler
-  >;
+  // 编译期由 Record<IpcChannel, IpcHandler> 保证 IPC_CHANNELS 全覆盖（缺一个直接 TS 报错），
+  // 运行时再防御性检查一次，避免任何动态/降级路径漏注册。
   for (const channel of Object.values(IPC_CHANNELS)) {
-    if (typeof coverage[channel] !== 'function') {
+    if (typeof handlers[channel] !== 'function') {
       throw new AppError('INTERNAL', `IPC channel 未实现：${channel}`);
     }
   }
 
-  return handlers;
+  return handlers as Record<string, IpcHandler>;
 }
 
 // ---------------------------------------------------------------------------

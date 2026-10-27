@@ -124,12 +124,35 @@
 
 - **发布权限 = 持有 channel_pri.json**。将其私下发给管理员即可授权发布（AppHub 支持导入/导出）；
 - `accessKey`：私密频道必填、公开频道不得存在；它同时用于存储路径与订阅链接；
-- `storage` 支持三种 provider（详见 STORAGE.md）：
+- `storage` 支持四种 provider（详见 STORAGE.md）：
   - `ftp-http`：FTP 写入 + nginx HTTP 读取；
   - `local`：本地目录写入 + 静态服务器/nginx 读取；
+  - `local-host`：本机目录写入 + **AppHub 内置 Host Server** 提供 HTTP 下载（默认监听 `0.0.0.0`，局域网可访问）；
   - `s3`：S3/MinIO 写入；`publicBaseUrl` 用于生成公开下载地址；
 - 本地保存时经 Electron `safeStorage` 加密（文件名 `<channelId>.enc`），运行时解密；导出时生成明文 JSON（用户显式操作）；
 - 订阅者**不需要** channel_pri.json；私密频道订阅者只需要能力链接（含 accessKey 的 channel.json URL）。
+
+`local-host` 配置示例（channel_pri.json 内）：
+
+```json
+{
+  "storage": {
+    "provider": "local-host",
+    "rootDir": "D:/AppHubRepo/example",
+    "port": 8787,
+    "bindHost": "0.0.0.0",
+    "advertiseHost": "192.168.1.20",
+    "publicBaseUrl": "https://apps.example.com/example/"
+  }
+}
+```
+
+- `rootDir`：频道仓库根目录，AppHub 直接写入，内置 Host 只读提供该目录；
+- `port`：Host 监听端口（默认 `8787`）；
+- `bindHost`：默认 `0.0.0.0`（局域网可访问）；`127.0.0.1` 仅本机调试；
+- `advertiseHost`：生成订阅 URL 时使用的对外主机名/IPv4（可选；留空自动取本机局域网 IPv4，离线回退 `127.0.0.1`）；
+- `publicBaseUrl`：反向代理/自定义域名场景下完整覆盖公开基础 URL（可选，优先级最高）；
+- Host 服务生命周期由 App 管理（手动启动/停止，App 退出自动停止）；公开协议文件（channel.json/app.meta.json/files.json）与 `local` 完全一致，不包含 Host 地址。
 
 ## 5. app.meta.json
 

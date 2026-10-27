@@ -1,14 +1,16 @@
 import { Badge, RoleBadge, VisibilityBadge } from '../components/Badges';
 import { Icon } from '../components/Icon';
 import { EmptyState, ErrorState, LoadingState, PageHeader, Section } from '../components/StateViews';
-import { formatDateTime } from '../format';
-import type { ApiError, ChannelSummaryDTO } from '../types';
+import { formatDateTime, hostStatusLabel } from '../format';
+import type { ApiError, ChannelSummaryDTO, HostStatusDTO } from '../types';
 
 export interface ChannelsViewProps {
   channels: ChannelSummaryDTO[];
   loading: boolean;
   error: ApiError | null;
   refreshing?: boolean;
+  /** channelId -> 本机 Host 状态（来自 api.host.list()）。 */
+  hostStatuses?: Record<string, HostStatusDTO>;
   onRetry: () => void;
   onRefresh: () => void;
   onCreate: () => void;
@@ -18,9 +20,11 @@ export interface ChannelsViewProps {
 
 function ChannelCard({
   channel,
+  host,
   onOpen,
 }: {
   channel: ChannelSummaryDTO;
+  host?: HostStatusDTO;
   onOpen: (channelId: string) => void;
 }) {
   return (
@@ -36,6 +40,15 @@ function ChannelCard({
         <span className="badge-row">
           <VisibilityBadge visibility={channel.visibility} />
           <RoleBadge role={channel.role} />
+          {host ? (
+            <Badge
+              tone={host.running ? 'success' : 'muted'}
+              icon={host.running ? 'server' : 'x-circle'}
+              testId="channel-host-badge"
+            >
+              {hostStatusLabel(host.running)}
+            </Badge>
+          ) : null}
         </span>
       </span>
       <span className="card-desc">{channel.description || '暂无频道描述'}</span>
@@ -67,6 +80,7 @@ export function ChannelsView({
   loading,
   error,
   refreshing = false,
+  hostStatuses = {},
   onRetry,
   onRefresh,
   onCreate,
@@ -157,7 +171,12 @@ export function ChannelsView({
             >
               <div className="grid channel-grid">
                 {owned.map((channel) => (
-                  <ChannelCard key={channel.id} channel={channel} onOpen={onOpenChannel} />
+                  <ChannelCard
+                    key={channel.id}
+                    channel={channel}
+                    host={hostStatuses[channel.id]}
+                    onOpen={onOpenChannel}
+                  />
                 ))}
               </div>
             </Section>
@@ -167,7 +186,12 @@ export function ChannelsView({
             <Section title="我订阅的" count={subscribed.length} className="section-channels">
               <div className="grid channel-grid">
                 {subscribed.map((channel) => (
-                  <ChannelCard key={channel.id} channel={channel} onOpen={onOpenChannel} />
+                  <ChannelCard
+                    key={channel.id}
+                    channel={channel}
+                    host={hostStatuses[channel.id]}
+                    onOpen={onOpenChannel}
+                  />
                 ))}
               </div>
             </Section>

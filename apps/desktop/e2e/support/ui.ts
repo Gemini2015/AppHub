@@ -18,6 +18,7 @@ export const TESTID = {
   subscribeChannelButton: 'subscribe-channel-button',
 
   channelCard: 'channel-card',
+  channelHostBadge: 'channel-host-badge',
   appCard: 'app-card',
   installedAppCard: 'installed-app-card',
 
@@ -30,6 +31,26 @@ export const TESTID = {
   createChannelNext: 'create-channel-next',
   createChannelSubmit: 'create-channel-submit',
   storageProviderSelect: 'storage-provider-select',
+
+  // 创建频道向导：本机 Host（local-host）配置
+  localHostRootDir: 'local-host-root-dir',
+  localHostBrowseRoot: 'local-host-browse-root',
+  localHostPort: 'local-host-port',
+  localHostBindHost: 'local-host-bind-host',
+
+  // 频道详情：本机 Host 面板
+  hostPanel: 'host-panel',
+  hostStatus: 'host-status',
+  hostUrl: 'host-url',
+  hostStartButton: 'host-start-button',
+  hostStopButton: 'host-stop-button',
+  hostEditConfig: 'host-edit-config',
+  hostConfigDialog: 'host-config-dialog',
+  hostConfigPort: 'host-config-port',
+  hostConfigBindHost: 'host-config-bind-host',
+  hostConfigAdvertiseHost: 'host-config-advertise-host',
+  hostConfigPublicBaseUrl: 'host-config-public-base-url',
+  hostConfigSubmit: 'host-config-submit',
 
   channelDetail: 'channel-detail',
   appDetail: 'app-detail',

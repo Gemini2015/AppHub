@@ -209,6 +209,31 @@ export const LocalStorageConfigSchema = z.object({
   headers: z.record(z.string()).optional(),
 });
 
+/**
+ * 本机内置 Host：AppHub 主进程直接在本机启动静态 HTTP 服务提供频道仓库。
+ * 默认监听 0.0.0.0（局域网可访问），127.0.0.1 仅用于"仅本机调试"。
+ */
+export const LocalHostStorageConfigSchema = z.object({
+  provider: z.literal('local-host'),
+  /** 频道仓库根目录（绝对路径；Host 只提供该目录下的文件）。 */
+  rootDir: z.string().min(1),
+  /** Host Server 监听端口。 */
+  port: z.number().int().min(1).max(65535).default(8787),
+  /** 监听范围：默认所有网卡（局域网可访问）；127.0.0.1 仅本机调试。 */
+  bindHost: z.enum(['0.0.0.0', '127.0.0.1']).default('0.0.0.0'),
+  /** 生成订阅 URL 时对外展示的主机名或 IPv4（不含协议/端口/路径），可选。 */
+  advertiseHost: z
+    .string()
+    .max(255)
+    .refine(
+      (value) => /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(value),
+      'advertiseHost 只能是主机名或 IPv4（不含协议、端口、路径）',
+    )
+    .optional(),
+  /** 反向代理/自定义域名场景下完整覆盖公开基础 URL（http(s)）。 */
+  publicBaseUrl: HttpUrlSchema.optional(),
+});
+
 export const FtpSettingsSchema = z.object({
   host: z.string().min(1),
   port: z.number().int().min(1).max(65535).default(21),
@@ -253,6 +278,7 @@ export const S3StorageConfigSchema = z.object({
 
 export const StorageConfigSchema = z.discriminatedUnion('provider', [
   LocalStorageConfigSchema,
+  LocalHostStorageConfigSchema,
   FtpHttpStorageConfigSchema,
   S3StorageConfigSchema,
 ]);

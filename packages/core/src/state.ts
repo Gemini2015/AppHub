@@ -416,9 +416,13 @@ export class StateStore {
   }
 
   async writeChannelCache(channel: ChannelFile): Promise<void> {
-    const filePath = this.channelCacheFile(channel.id);
-    await ensureDir(path.dirname(filePath));
-    await writeJsonAtomic(filePath, channel);
+    // 频道级缓存文件写入串行化：即使不同上层操作（刷新/发布/安装）并发，
+    // 也不会对同一目标文件并发 rename（Windows 上会 EPERM/EBUSY）。
+    await this.mutex.runExclusive(`channel-cache:${channel.id}`, async () => {
+      const filePath = this.channelCacheFile(channel.id);
+      await ensureDir(path.dirname(filePath));
+      await writeJsonAtomic(filePath, channel);
+    });
   }
 
   async dropChannelCache(channelId: string): Promise<void> {
@@ -442,9 +446,11 @@ export class StateStore {
   }
 
   async writeAppMetaCache(meta: AppMetaFile): Promise<void> {
-    const filePath = this.appMetaCacheFile(meta.channelId, meta.appId);
-    await ensureDir(path.dirname(filePath));
-    await writeJsonAtomic(filePath, meta);
+    await this.mutex.runExclusive(`app-meta-cache:${meta.channelId}:${meta.appId}`, async () => {
+      const filePath = this.appMetaCacheFile(meta.channelId, meta.appId);
+      await ensureDir(path.dirname(filePath));
+      await writeJsonAtomic(filePath, meta);
+    });
   }
 
   // -------------------------------------------------------------------------

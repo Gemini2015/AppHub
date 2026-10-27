@@ -2001,6 +2001,13 @@ a {
   color: var(--accent);
 }
 
+.toast-warning {
+  border-color: rgba(251, 191, 36, 0.4);
+}
+.toast-warning .toast-icon {
+  color: var(--warn);
+}
+
 .toast-body {
   flex: 1;
   min-width: 0;
@@ -2029,6 +2036,127 @@ a {
 .toast-close {
   width: 22px;
   height: 22px;
+}
+
+/* =========================================================================
+   本机 Host 面板
+   ========================================================================= */
+
+.host-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 17px 19px;
+}
+
+.host-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.host-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  min-width: 0;
+}
+
+.host-title h2 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  font-size: 15.5px;
+  font-weight: 600;
+}
+
+.host-title .field-hint {
+  margin-top: 2px;
+  max-width: 620px;
+}
+
+.host-icon {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: rgba(74, 222, 128, 0.26);
+}
+
+.host-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.host-meta {
+  margin: 0;
+}
+
+.host-urls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(8, 11, 20, 0.45);
+}
+
+.host-url-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.host-url-primary .host-url-value {
+  color: var(--accent);
+}
+
+.host-url-label {
+  flex-shrink: 0;
+  min-width: 92px;
+  color: var(--muted);
+}
+
+.host-url-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.host-error-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* 输入框 + 右侧按钮（如 rootDir + 浏览…） */
+.input-with-action {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.input-with-action > .field {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 与 TextField 的输入框（label 高度之后）对齐 */
+.input-with-action > .btn {
+  margin-top: 22px;
 }
 
 /* =========================================================================

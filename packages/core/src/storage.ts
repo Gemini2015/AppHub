@@ -38,9 +38,17 @@ export async function probeStorage(deps: StorageDeps, config: StorageConfig): Pr
 
 /** 存储配置中附带的 HTTP 头（用于 HTTP 下载，例如 Basic Auth）。 */
 export function storageHeaders(config: StorageConfig): Record<string, string> | undefined {
-  if (config.provider === 'local') return config.headers;
-  if (config.provider === 'ftp-http') return config.http.headers;
-  return config.headers;
+  switch (config.provider) {
+    case 'local':
+      return config.headers;
+    case 'ftp-http':
+      return config.http.headers;
+    case 'local-host':
+      // 本机内置 Host 不附加额外鉴权头
+      return undefined;
+    case 's3':
+      return config.headers;
+  }
 }
 
 /** channel.json 的存储对象 key（私密频道带 _private/<id>/<accessKey> 前缀）。 */

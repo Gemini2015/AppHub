@@ -3,6 +3,7 @@ import type {
   AppVersionEntry,
   ChannelFile,
   ChannelPrivateFile,
+  ErrorCode,
   FileEntry,
   Platform,
   PublishMode,
@@ -319,6 +320,58 @@ export interface UpdateAllResult {
 }
 
 // ---------------------------------------------------------------------------
+// 本机 Host
+// ---------------------------------------------------------------------------
+
+export interface HostUrls {
+  /** 首选订阅地址（channel.json；私密频道含 accessKey）。 */
+  channelUrl: string;
+  /** 本机回环候选地址。 */
+  localChannelUrl: string;
+  /** 全部局域网候选地址（bindHost 为 0.0.0.0 时可能有多条）。 */
+  lanChannelUrls: string[];
+}
+
+export interface HostStatus {
+  channelId: string;
+  channelName: string;
+  visibility: Visibility;
+  running: boolean;
+  /** 配置端口（可能等于 port）。 */
+  configuredPort: number;
+  /** 运行中的实际端口；停止时为 null。 */
+  port: number | null;
+  bindHost: string;
+  urls: HostUrls;
+  startedAt?: string;
+  lastError?: { code: ErrorCode; message: string };
+}
+
+export interface HostConfigPatch {
+  port?: number;
+  bindHost?: '0.0.0.0' | '127.0.0.1';
+  /** 传空字符串表示清除该项 */
+  advertiseHost?: string;
+  /** 传空字符串表示清除该项 */
+  publicBaseUrl?: string;
+}
+
+export interface HostService {
+  /** 启动指定频道的本机 Host（幂等）。 */
+  start(channelId: string): Promise<HostStatus>;
+  /** 停止指定频道的本机 Host（幂等）。 */
+  stop(channelId: string): Promise<HostStatus>;
+  /** 查询单个频道的 Host 状态；非本机托管频道抛 UNSUPPORTED。 */
+  status(channelId: string): Promise<HostStatus>;
+  /** 列出所有可托管的 local-host 频道（含已停止）。 */
+  list(): Promise<HostStatus[]>;
+  /** 修改 Host 配置（仅停止状态；rootDir 不可改）。 */
+  updateConfig(channelId: string, patch: HostConfigPatch): Promise<HostStatus>;
+  /** 停止所有 Host（App 退出时调用）。 */
+  stopAll(): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
 // 服务
 // ---------------------------------------------------------------------------
 
@@ -363,6 +416,8 @@ export interface AppHubCore {
   readonly channels: ChannelService;
   readonly publishing: PublishService;
   readonly library: LibraryService;
+  /** 本机 Host（local-host 频道）服务。 */
+  readonly host: HostService;
   close(): Promise<void>;
 }
 

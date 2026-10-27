@@ -13,6 +13,7 @@ import {
   serializeChannelFile,
   serializeChannelPrivateFile,
   serializeFilesFile,
+  StorageConfigSchema,
   stringifyJson,
 } from './index';
 import type {
@@ -21,6 +22,7 @@ import type {
   ChannelPrivateFile,
   FilesFile,
   FtpHttpStorageConfig,
+  LocalHostStorageConfig,
 } from './index';
 
 const CHANNEL_ID = 'ch_0123456789abcdef0123';
@@ -276,6 +278,56 @@ describe('channel_pri.json', () => {
       publicBaseUrl: 'file:///C:/repo',
     };
     expect(() => ChannelPrivateFileSchemaStrict.parse(bad)).toThrow(/http\(s\)/);
+  });
+});
+
+describe('local-host 存储配置（本机 Host）', () => {
+  it('默认监听 0.0.0.0:8787，并可通过 channel_pri 序列化往返', () => {
+    const pri = makeChannelPrivate({
+      storage: { provider: 'local-host', rootDir: 'D:/AppHubRepo' },
+    });
+    const parsed = parseChannelPrivateFile(serializeChannelPrivateFile(pri));
+    const storage = parsed.storage as LocalHostStorageConfig;
+    expect(storage).toEqual({
+      provider: 'local-host',
+      rootDir: 'D:/AppHubRepo',
+      port: 8787,
+      bindHost: '0.0.0.0',
+    });
+    expect(StorageConfigSchema.parse({ provider: 'local-host', rootDir: '/repo' })).toMatchObject({
+      port: 8787,
+      bindHost: '0.0.0.0',
+    });
+  });
+
+  it('支持 advertiseHost / publicBaseUrl / 仅本机绑定', () => {
+    const storage = StorageConfigSchema.parse({
+      provider: 'local-host',
+      rootDir: '/repo',
+      port: 18888,
+      bindHost: '127.0.0.1',
+      advertiseHost: 'apphub.lan',
+      publicBaseUrl: 'https://apps.example.com/repo/',
+    }) as LocalHostStorageConfig;
+    expect(storage.port).toBe(18888);
+    expect(storage.bindHost).toBe('127.0.0.1');
+    expect(storage.advertiseHost).toBe('apphub.lan');
+    expect(storage.publicBaseUrl).toBe('https://apps.example.com/repo/');
+  });
+
+  it('拒绝非法端口 / bindHost / advertiseHost / publicBaseUrl', () => {
+    const bads: unknown[] = [
+      { provider: 'local-host', rootDir: '/repo', port: 0 },
+      { provider: 'local-host', rootDir: '/repo', port: 70000 },
+      { provider: 'local-host', rootDir: '/repo', bindHost: '192.168.1.2' },
+      { provider: 'local-host', rootDir: '/repo', advertiseHost: 'http://x' },
+      { provider: 'local-host', rootDir: '/repo', advertiseHost: 'host:8080' },
+      { provider: 'local-host', rootDir: '/repo', publicBaseUrl: 'ftp://x/' },
+      { provider: 'local-host', rootDir: '' },
+    ];
+    for (const bad of bads) {
+      expect(StorageConfigSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
   });
 });
 

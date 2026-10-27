@@ -605,6 +605,85 @@ describe('PublishService - 进度 / 失败注入 / getApp / updateMeta', () => {
     expect(meta.versions).toHaveLength(1);
   });
 
+  it('同频道两个不同 App 真并发发布：channel.json 合并不丢 App（频道级串行回归）', async () => {
+    const env = await newEnv();
+    const channel = await createChannel(env);
+    const sourceA = await fixture({ 'a.exe': 'aaa' });
+    const sourceB = await fixture({ 'b.exe': 'bbb' });
+
+    // 多轮并发，覆盖 Windows 上并发写同一 channel.json 缓存/远端合并的竞争窗口
+    for (let round = 0; round < 5; round += 1) {
+      const version = `1.0.${round}`;
+      const results = await Promise.allSettled([
+        env.core.publishing.publish({
+          channelId: channel.id,
+          app: { appId: 'app-a', displayName: 'App A' },
+          version,
+          platform: 'windows',
+          publishMode: 'files',
+          entry: 'a.exe',
+          files: sourceA.inputs,
+        }),
+        env.core.publishing.publish({
+          channelId: channel.id,
+          app: { appId: 'app-b', displayName: 'App B' },
+          version,
+          platform: 'windows',
+          publishMode: 'files',
+          entry: 'b.exe',
+          files: sourceB.inputs,
+        }),
+      ]);
+      const rejected = results.filter((result) => result.status === 'rejected');
+      expect(
+        rejected.map((result) => (result as PromiseRejectedResult).reason),
+        `第 ${round} 轮并发发布不应失败`,
+      ).toEqual([]);
+
+      const channelFile = parseChannelFile(env.readObjectText('channel.json')!);
+      expect(channelFile.apps.map((app) => app.appId).sort()).toEqual(['app-a', 'app-b']);
+      expect(parseAppMetaFile(env.readObjectText(appMetaKey('app-a'))!).latest).toEqual({
+        windows: version,
+      });
+      expect(parseAppMetaFile(env.readObjectText(appMetaKey('app-b'))!).latest).toEqual({
+        windows: version,
+      });
+    }
+
+    // 并发写本地缓存也不应丢 App（Windows 上并发 rename 会 EPERM）
+    const cached = parseChannelFile(
+      await fs.readFile(path.join(env.dataDir, 'channels', channel.id, 'channel.json'), 'utf8'),
+    );
+    expect(cached.apps.map((app) => app.appId).sort()).toEqual(['app-a', 'app-b']);
+    expect(env.logger.entries.filter((entry) => entry.level === 'error')).toHaveLength(0);
+  });
+
+  it('同频道 publish 与 updateMeta 并发：channel.json 不丢 App 且展示信息生效', async () => {
+    const env = await newEnv();
+    const channel = await createChannel(env);
+    const demoSource = await fixture({ 'app.exe': 'demo' });
+    await env.core.publishing.publish(basePublish(channel.id, demoSource.inputs));
+
+    const otherSource = await fixture({ 'b.exe': 'other' });
+    const results = await Promise.allSettled([
+      env.core.publishing.publish({
+        channelId: channel.id,
+        app: { appId: 'other-app', displayName: 'Other App' },
+        version: '2.0.0',
+        platform: 'windows',
+        publishMode: 'files',
+        entry: 'b.exe',
+        files: otherSource.inputs,
+      }),
+      env.core.publishing.updateMeta(channel.id, 'demo', { displayName: 'Demo 改名' }),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled']);
+
+    const channelFile = parseChannelFile(env.readObjectText('channel.json')!);
+    expect(channelFile.apps.map((app) => app.appId).sort()).toEqual(['demo', 'other-app']);
+    expect(channelFile.apps.find((app) => app.appId === 'demo')!.displayName).toBe('Demo 改名');
+  });
+
   it('发布自定义 archiveName 并保留 App 展示字段', async () => {
     const env = await newEnv();
     const channel = await createChannel(env);

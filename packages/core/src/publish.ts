@@ -49,6 +49,7 @@ import type {
   PublishService,
   SecretBox,
 } from './types';
+import { channelWriteLockKey } from './mutex';
 import type { KeyedMutex } from './mutex';
 import type { StateStore } from './state';
 
@@ -232,7 +233,9 @@ export class PublishServiceImpl implements PublishService {
     const version = assertValidVersion(input.version);
     const platform = validatePlatform(input.platform);
     const publishMode = validatePublishMode(input.publishMode);
-    return this.deps.mutex.runExclusive(`publish:${record.channelId}:${appId}`, () =>
+    // 频道级互斥：同一频道的发布必须串行（channel.json 是唯一总索引，
+    // 同频道不同 App 并发发布会丢 App / 并发写本地缓存触发 Windows EPERM）。
+    return this.deps.mutex.runExclusive(channelWriteLockKey(record.channelId), () =>
       this.doPublish(record, appId, version, platform, publishMode, input),
     );
   }
@@ -243,7 +246,8 @@ export class PublishServiceImpl implements PublishService {
     if (record.role === 'subscriber') {
       throw new AppError('AUTH', '当前频道为订阅者身份，没有修改 App 元信息的权限');
     }
-    return this.deps.mutex.runExclusive(`meta:${channelId}:${appId}`, () =>
+    // 与 publish 共用频道级锁：updateMeta 也会重写 channel.json，必须串行合并。
+    return this.deps.mutex.runExclusive(channelWriteLockKey(channelId), () =>
       this.doUpdateMeta(record, appId, patch),
     );
   }

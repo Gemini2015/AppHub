@@ -107,6 +107,24 @@ UI -> core.library.install/update
 - `library.launch`：主进程校验 entry 位于 appRoot 内，`spawn(entryAbs, {detached:true, cwd:versionDir})`；
 - `library.uninstall`：删除该 App 根目录并更新索引。
 
+### 3.5 本机 Host（local-host）
+
+```
+UI(存储配置 rootDir/port/bindHost) -> IPC -> core.channels.create
+  1) 与 local 相同的目录写入流程（channel.json / app.meta.json / files.json 布局不变）
+  2) 订阅 URL：publicBaseUrl 覆盖 > advertiseHost > 局域网 IPv4（默认 bindHost=0.0.0.0）> 127.0.0.1
+  3) channel_pri.json 记录 local-host 配置；Host 生命周期由 App 管理
+UI 启动 Host -> core.host.start(channelId)
+  - 本机监听 port（默认 8787，绑定 0.0.0.0 即局域网可访问）
+  - 只读静态服务：GET/HEAD，禁止目录列表/隐藏文件/channel_pri.json/路径穿越/符号链接
+  - 返回 HostStatus（运行状态、端口、channelUrl/local/lan URL 候选）
+UI 停止 Host -> core.host.stop(channelId)：closeAllConnections 后立即释放端口
+```
+
+- 每个 local-host 频道对应一个 Host Server 与独立端口；运行状态只存内存，不随 App 启动自动恢复；
+- App 退出 / 取消订阅时自动停止对应 Host；
+- 私密频道 URL 携带 `_private/<channelId>/<accessKey>/` 前缀，能力链接即读取授权。
+
 ## 4. 数据与凭据
 
 ### 4.1 远端存储布局（频道根目录）
@@ -178,8 +196,9 @@ interface StorageAdapter {
 
 ### 5.2 `@apphub/core`（领域服务）
 
-公共 API 见 `packages/core/src/types.ts`：`createAppHubCore(context): AppHubCore`，含 `channels` / `publishing` / `library` 三个服务。
+公共 API 见 `packages/core/src/types.ts`：`createAppHubCore(context): AppHubCore`，含 `channels` / `publishing` / `library` / `host` 四个服务。
 
+- `host: HostService`：管理本机 Host（`start/stop/status/list/updateConfig/stopAll`）；HostServer 静态服务实现于 `packages/core/src/host.ts`，URL 推导复用 `@apphub/storage` 的 `resolveLocalHostBaseUrls`；
 - 所有方法失败抛 `AppError`；不向调用方暴露存储适配器实例；
 - 进度通过 `ProgressListener` 回调（IPC 层转换为事件推送）；
 - core 不依赖 Electron：`SecretBox`、`dataDir`、`fetchImpl`、`Clock` 全部注入，保证可在纯 Node 测试。
@@ -196,7 +215,7 @@ src/main/window.ts           BrowserWindow 创建（sandbox/contextIsolation/CSP
 src/main/core-manager.ts     createAppHubCore 注入 dataDir/secretBox/storageFactory/fetch
 src/main/secret-box.ts       Electron safeStorage 实现 core.SecretBox
 src/main/selection-registry.ts  文件/文件夹/zip 选择 + token 映射 + zip 检查
-src/main/ipc.ts              IPC handlers：zod 校验 + ApiResult 包装 + 事件推送
+src/main/ipc.ts              IPC handlers：zod 校验 + ApiResult 包装 + 事件推送（含 host start/stop/status/list/updateConfig、system.pickDirectory）
 src/main/app-launcher.ts     校验 entry 后 spawn + reveal
 src/main/logger.ts           文件日志（主进程）
 src/preload/index.ts         contextBridge 暴露 AppHubApi
@@ -205,7 +224,8 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 约定：
 
 - IPC handler 统一用 `wrap(handler)` 捕获错误转 `{ok:false,error}`；
-- 每次操作 push `progress` 事件（带 operationId）与 `data-changed` 事件；
+- 每次操作 push `progress` 事件（带 operationId）与 `data-changed` 事件（host 启停使用 `domain:'host'`）；
+- Host 服务运行在主进程内，随 App 退出自动停止（core.close → host.stopAll）；
 - 环境变量：`APPHUB_USER_DATA_DIR`（测试/多实例）、`APPHUB_DEV_SERVER_URL`（开发模式）；
 - 构建产物：`out/main/index.cjs`、`out/preload/index.cjs`、`out/renderer/`（Vite 构建）。
 
@@ -214,7 +234,7 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 页面/视图（ui-dev 实现）：
 
 1. **频道页**：列表（已订阅/我拥有的）、创建频道向导（基础信息 + 可见性 + 存储配置）、订阅对话框（URL + 可选 headers）；
-2. **频道详情**：频道信息、订阅链接复制、App 卡片列表、刷新、发布 App 入口、管理员导入/导出 channel_pri.json；
+2. **频道详情**：频道信息、订阅链接复制、App 卡片列表、刷新、发布 App 入口、管理员导入/导出 channel_pri.json；local-host 频道额外显示 **Host 面板**（启动/停止/编辑配置/复制本机与局域网 URL）；
 3. **App 详情**：简介、各平台最新版本、版本历史（changelog）、安装/更新/已安装状态、发布新版本；
 4. **发布向导**：选择发布方式（散文件/zip）、选文件/文件夹/zip、版本号、平台、入口、changelog、进度/错误展示；
 5. **本地库**：已安装 App 列表、更新检测、安装/更新/校验/启动/打开目录/卸载；
@@ -228,12 +248,14 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 
 - 每个方法返回 `ApiResult<T>`；
 - `AppHubApi` 是 `window.apphub` 的类型；
-- 渲染进程只能传 selectionId（文件路径不进入渲染进程）；
+- 渲染进程只能传 selectionId（发布文件路径不进入渲染进程）；**唯一例外**：local-host 的频道仓库目录通过 `system.pickDirectory` 让用户选择后返回路径字符串（用户显式选择，不用于其他文件读写）；
+- 新增 `host` 命名空间（start/stop/status/list/updateConfig）；host 变更广播 `data-changed {domain:'host'}`；
 - 主进程必须校验 sender frame（只接受自家窗口）。
 
 ## 7. 并发与一致性
 
 - 同一进程内对同一频道/App 的发布串行化（core 内部 keyed mutex）；
+- Host 的 start/stop/updateConfig 按 `host:<channelId>` 串行；运行中禁止 updateConfig（先停止），避免端口/URL 状态错乱；
 - 远端更新采用"读取-合并-写回"：发布前重新读取 app.meta.json / channel.json；
 - FTP 无 CAS：最后写入者胜出。文档建议同一频道发布操作集中在一台机器，或使用 S3（支持条件写扩展）；
 - 幂等重试：若同版本同平台已存在且文件清单（path+size+md5）完全一致，视为成功并确保 channel.json 登记；
@@ -242,18 +264,18 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 ## 8. 测试要求（详见 TESTING.md）
 
 - **单元**：protocol（已由 Lead 覆盖）、storage 每个适配器、core 的发布/安装引擎、IPC 校验、React 组件；
-- **集成**：内存存储、本地目录+静态服务器、**FTP 服务器 + 静态服务器（模拟 ftp+nginx）**、S3 mock；完整链路：创建→发布（散文件/zip）→订阅→安装→更新→校验→卸载；私密频道鉴权；冲突/失败注入/回滚；
-- **E2E**：Playwright 启动 Electron，订阅+安装+启动失败提示等关键链路；
+- **集成**：内存存储、本地目录+静态服务器、**FTP 服务器 + 静态服务器（模拟 ftp+nginx）**、S3 mock、**local-host 内置 Host（真实 HTTP 启停/订阅/安装）**；完整链路：创建→发布（散文件/zip）→订阅→安装→更新→校验→卸载；私密频道鉴权；冲突/失败注入/回滚；
+- **E2E**：Playwright 启动 Electron，订阅+安装+启动失败提示、local-host 创建/启停/URL 可访问等关键链路；
 - 所有测试必须 `pnpm test` 一条命令可跑，不依赖外网/真实 FTP 服务；
 - 禁止跳过测试（skip）来"变绿"；不允许只测 happy path。
 
 ## 9. 交付验收清单
 
-- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（350 个 Vitest 用例，0 skipped）；
+- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（445 个 Vitest 用例，0 skipped）；
 - [x] `pnpm build` 产出 `out/`，`pnpm dev` 可启动应用；`pnpm package` 产出 `apps/desktop/release/win-unpacked/AppHub.exe`；
-- [x] 演示脚本 `pnpm demo` 在 FTP+nginx 模拟环境下完成创建/发布/订阅/安装/更新/zip/卸载；
+- [x] 演示脚本 `pnpm demo` 在 FTP+nginx 模拟环境与本机 Host 环境下完成创建/发布/订阅/安装/更新/启停验证；
 - [x] README 的 Quickstart 与截图一致；
-- [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5）；
+- [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5；Phase 5 本机 Host 为新增能力 R48–R59）；
 - [x] docs/PROTOCOL.md、STORAGE.md、TESTING.md 完整；
-- [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 6/6）。
+- [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 9/9，覆盖本机 Host 启停与 URL 可达）。
 

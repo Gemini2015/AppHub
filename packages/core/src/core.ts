@@ -5,9 +5,10 @@ import { HttpClient, systemClock } from './http';
 import { KeyedMutex } from './mutex';
 import { StateStore } from './state';
 import { ChannelServiceImpl } from './channels';
+import { HostServiceImpl } from './host';
 import { PublishServiceImpl } from './publish';
 import { LibraryServiceImpl } from './library';
-import type { AppHubCore, Clock, CoreContext, FetchLike, Logger } from './types';
+import type { AppHubCore, Clock, CoreContext, FetchLike, HostService, Logger } from './types';
 
 /**
  * AppHub 核心服务工厂。
@@ -65,6 +66,8 @@ class AppHubCoreImpl implements AppHubCore {
   readonly channels: AppHubCore['channels'];
   readonly publishing: AppHubCore['publishing'];
   readonly library: AppHubCore['library'];
+  readonly host: HostService;
+  private readonly hostImpl: HostServiceImpl;
   private readonly ready: Promise<void>;
   private readonly logger: Logger;
 
@@ -73,6 +76,7 @@ class AppHubCoreImpl implements AppHubCore {
     channels: ChannelServiceImpl;
     publishing: PublishServiceImpl;
     library: LibraryServiceImpl;
+    host: HostServiceImpl;
     ready: Promise<void>;
     logger: Logger;
   }) {
@@ -80,11 +84,19 @@ class AppHubCoreImpl implements AppHubCore {
     this.channels = wrapService(options.channels);
     this.publishing = wrapService(options.publishing);
     this.library = wrapService(options.library);
+    this.hostImpl = options.host;
+    this.host = wrapService(options.host);
     this.ready = options.ready;
     this.logger = options.logger;
   }
 
   async close(): Promise<void> {
+    // 先停止所有本机 Host（释放端口；不依赖 ready 是否成功）
+    try {
+      await this.hostImpl.stopAll();
+    } catch (error) {
+      this.logger.warn('关闭本机 Host 失败', { reason: AppError.from(error).message });
+    }
     try {
       await this.ready;
     } catch (error) {
@@ -119,6 +131,15 @@ export function createAppHubCore(context: CoreContext): AppHubCore {
     defaultHeaders: context.defaultHeaders,
   });
   const ready = state.init();
+  // 装配顺序：StateStore → HostService → ChannelService（unsubscribe 时 best-effort 停止 Host）
+  const host = new HostServiceImpl({
+    state,
+    mutex,
+    clock,
+    logger,
+    storageFactory: context.storageFactory,
+    ready,
+  });
   const channels = new ChannelServiceImpl({
     state,
     http,
@@ -128,6 +149,7 @@ export function createAppHubCore(context: CoreContext): AppHubCore {
     logger,
     mutex,
     ready,
+    onChannelRemoved: (channelId) => host.stopInternal(channelId),
   });
   const publishing = new PublishServiceImpl(
     {
@@ -156,6 +178,7 @@ export function createAppHubCore(context: CoreContext): AppHubCore {
     channels,
     publishing,
     library,
+    host,
     ready,
     logger,
   });

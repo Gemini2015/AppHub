@@ -28,8 +28,36 @@ test.describe('公开频道：订阅 → 安装 → 校验 → 卸载', () => {
     // 1) 订阅（成功后 UI 会自动跳转到频道详情页）
     await window.getByTestId(TESTID.subscribeChannelButton).click();
     await expect(window.getByTestId(TESTID.subscribeDialog)).toBeVisible();
-    await window.getByTestId(TESTID.subscribeUrlInput).fill(fixture.channelUrl);
+
+    const urlInput = window.getByTestId(TESTID.subscribeUrlInput);
+    await urlInput.fill(fixture.channelUrl);
+    await expect(urlInput).toHaveValue(fixture.channelUrl);
     await window.getByTestId(TESTID.subscribeSubmit).click();
+
+    // 订阅失败时输出可定位的错误信息（而不是空等 120s 后只有 "元素不存在"）
+    await expect
+      .poll(
+        async () => {
+          if (await window.getByTestId(TESTID.channelDetail).isVisible().catch(() => false)) {
+            return 'detail';
+          }
+          if (await window.getByTestId(TESTID.dialogError).isVisible().catch(() => false)) {
+            return 'error';
+          }
+          return 'pending';
+        },
+        { timeout: TIMEOUTS.op, intervals: [100, 250, 500] },
+      )
+      .not.toBe('pending');
+    if (await window.getByTestId(TESTID.dialogError).isVisible().catch(() => false)) {
+      const [inputValue, errorText] = await Promise.all([
+        urlInput.inputValue(),
+        window.getByTestId(TESTID.dialogError).innerText(),
+      ]);
+      throw new Error(
+        `订阅失败：inputValue=${JSON.stringify(inputValue)}；期望=${JSON.stringify(fixture.channelUrl)}；错误=${JSON.stringify(errorText)}`,
+      );
+    }
 
     await expect(window.getByTestId(TESTID.channelDetail)).toBeVisible({ timeout: TIMEOUTS.op });
     await expect(window.getByTestId(TESTID.subscribeDialog)).toBeHidden();

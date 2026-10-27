@@ -28,6 +28,7 @@ import type {
 export const IPC_CHANNELS = {
   systemInfo: 'apphub:system:info',
   systemOpenDataDir: 'apphub:system:open-data-dir',
+  systemPickDirectory: 'apphub:system:pick-directory',
 
   channelsList: 'apphub:channels:list',
   channelsGet: 'apphub:channels:get',
@@ -40,6 +41,12 @@ export const IPC_CHANNELS = {
   channelsImportPrivateConfig: 'apphub:channels:import-private-config',
   channelsExportPrivateConfig: 'apphub:channels:export-private-config',
   channelsSubscribeUrl: 'apphub:channels:subscribe-url',
+
+  hostStart: 'apphub:host:start',
+  hostStop: 'apphub:host:stop',
+  hostStatus: 'apphub:host:status',
+  hostList: 'apphub:host:list',
+  hostUpdateConfig: 'apphub:host:update-config',
 
   publishPick: 'apphub:publish:pick',
   publishInspectSelection: 'apphub:publish:inspect-selection',
@@ -327,6 +334,41 @@ export interface SystemInfoDTO {
   installedCount: number;
 }
 
+// ---------------------------------------------------------------------------
+// 本机 Host DTO
+// ---------------------------------------------------------------------------
+
+export interface HostUrlsDTO {
+  channelUrl: string;
+  localChannelUrl: string;
+  lanChannelUrls: string[];
+}
+
+export interface HostStatusDTO {
+  channelId: string;
+  channelName: string;
+  visibility: Visibility;
+  running: boolean;
+  configuredPort: number;
+  port: number | null;
+  bindHost: string;
+  urls: HostUrlsDTO;
+  startedAt?: string;
+  lastError?: ApiError;
+}
+
+export interface HostConfigPatchDTO {
+  port?: number;
+  bindHost?: '0.0.0.0' | '127.0.0.1';
+  advertiseHost?: string;
+  publicBaseUrl?: string;
+}
+
+export interface UpdateHostConfigRequestDTO {
+  channelId: string;
+  patch: HostConfigPatchDTO;
+}
+
 export type ProgressOperation = 'publish' | 'install' | 'update' | 'verify';
 
 export interface ProgressEventDTO {
@@ -345,7 +387,7 @@ export interface ProgressEventDTO {
 }
 
 export interface DataChangedEventDTO {
-  domain: 'channels' | 'library' | 'apps';
+  domain: 'channels' | 'library' | 'apps' | 'host';
   channelId?: string;
   appId?: string;
 }
@@ -360,6 +402,8 @@ export interface AppHubApi {
   system: {
     info(): Promise<ApiResult<SystemInfoDTO>>;
     openDataDir(): Promise<ApiResult<void>>;
+    /** 选择本地目录（用于 local-host 的 rootDir 等），取消返回 null。 */
+    pickDirectory(): Promise<ApiResult<string | null>>;
   };
   channels: {
     list(): Promise<ApiResult<ChannelSummaryDTO[]>>;
@@ -376,6 +420,13 @@ export interface AppHubApi {
   };
   apps: {
     get(channelId: string, appId: string): Promise<ApiResult<AppDetailDTO>>;
+  };
+  host: {
+    start(channelId: string): Promise<ApiResult<HostStatusDTO>>;
+    stop(channelId: string): Promise<ApiResult<HostStatusDTO>>;
+    status(channelId: string): Promise<ApiResult<HostStatusDTO>>;
+    list(): Promise<ApiResult<HostStatusDTO[]>>;
+    updateConfig(input: UpdateHostConfigRequestDTO): Promise<ApiResult<HostStatusDTO>>;
   };
   publish: {
     pick(kind: PickKind): Promise<ApiResult<PublishSelectionDTO | null>>;

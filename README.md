@@ -26,7 +26,8 @@ AppHub 是一个基于 **Electron + React + TypeScript** 的跨平台桌面应�
 | 散文件发布更新 app.meta.json | 每个文件 size + MD5；客户端按 MD5 只下载变化文件 |
 | zip 发布更新 app.meta.json | 记录 archive size/MD5；客户端下载 zip → 校验 → 解压覆盖 |
 | app.meta.json 含历史版本 + files.json | 每版本完整文件清单；`app.meta.json` 保留全部历史 |
-| 频道配置 App 存储 | 创建频道时配置 `local` / `ftp-http` / `s3`（可扩展） |
+| 频道配置 App 存储 | 创建频道时配置 `local` / `local-host` / `ftp-http` / `s3`（可扩展） |
+| 本机 Host 一键分享 | 内置 Host Server 直接托管本地目录，默认监听局域网，生成可分享的 `channel.json` URL，可随时启停 |
 | FTP + nginx 存储发布 | FTP 上传 + nginx 下载；也支持本地目录/MinIO |
 | 完整的测试方案 | 单元 + 集成（进程内 FTP/HTTP/S3 模拟）+ Electron E2E + 手工矩阵，见 [docs/TESTING.md](./docs/TESTING.md) |
 
@@ -39,6 +40,10 @@ AppHub 是一个基于 **Electron + React + TypeScript** 的跨平台桌面应�
 | 发布向导 | 本地库 |
 | --- | --- |
 | ![发布向导](docs/screenshots/04-publish-wizard.png) | ![本地库](docs/screenshots/05-library.png) |
+
+| 本机 Host 面板（局域网分享） | 创建 local-host 频道 |
+| --- | --- |
+| ![本机 Host 面板](docs/screenshots/09-host-panel.png) | ![创建本机 Host 频道](docs/screenshots/10-create-local-host.png) |
 
 > 截图来自真实 Electron 构建产物（960px 窗口，演示数据）。
 
@@ -86,24 +91,24 @@ pnpm test           # 全部单元/集成测试（离线，进程内模拟 FTP/n
 pnpm typecheck      # 所有包 TypeScript 严格检查
 pnpm verify         # 一键验收：全部 test + typecheck + desktop build
 pnpm verify:e2e     # 一键验收（含真实 Electron Playwright E2E，14 步）
-pnpm demo           # 无需 GUI 的全链路演示：创建频道→发布→订阅→安装→更新
+pnpm demo           # 无需 GUI 的全链路演示：FTP+nginx 频道 + 本机 Host 频道（创建→发布→订阅→安装→更新/启停）
 ```
 
 > 开发/测试环境使用 `APPHUB_USER_DATA_DIR` 可以指定独立数据目录，便于多实例与 E2E 测试。
 
-## 验收结果（本机实测，2026-10-21）
+## 验收结果（本机实测，2026-10-27，含本机 Host）
 
 | 项目 | 结果 |
 | --- | --- |
-| `pnpm verify:e2e`（6 包 test + 6 包 typecheck + build + E2E） | **14/14 步通过，PASS，49.5s** |
-| Vitest 单元/集成测试 | **350 个用例，0 skipped**（protocol 24 / storage 39 / core 90 / 集成 30 / desktop 167） |
-| Electron E2E（Playwright + 真实 Electron） | **6/6 通过**（启动、订阅→安装→校验→卸载、错误处理、创建/发布向导） |
-| `@apphub/core` 覆盖率（v8） | statements 86.1% / branches 76.6% / functions 91.1% |
-| `pnpm demo`（真实进程内 FTP + 静态 HTTP，模拟 ftp+nginx） | 创建频道 → files 发布 1.0.0/1.0.1/1.0.2 → 订阅 → 安装 → 差量更新 → zip App 安装 → 卸载 全部通过 |
+| `pnpm verify:e2e`（6 包 test + 6 包 typecheck + build + E2E） | **14/14 步通过，PASS，61.5s** |
+| Vitest 单元/集成测试 | **445 个用例，0 skipped**（protocol 27 / storage 56 / core 118 / 集成 37 / desktop 207） |
+| Electron E2E（Playwright + 真实 Electron） | **9/9 通过**（启动、订阅→安装→校验→卸载、错误处理、创建/发布向导、本机 Host 创建/启停/URL 可达/私密能力链接） |
+| `@apphub/core` 覆盖率（v8，含 HostServer） | statements 85.9% / branches 77.4% / functions 92.3% |
+| `pnpm demo`（真实进程内 FTP + 静态 HTTP + 本机 Host） | ftp+nginx 全链路 + **local-host 创建→发布→启动 Host→订阅安装→停止/重启验证** 全部通过 |
 | `pnpm package`（electron-builder --dir） | `apps/desktop/release/win-unpacked/AppHub.exe` 生成成功 |
 | 环境 | Windows / Node 22.23 / pnpm 11.22 / Electron 38.8 / 完全离线 |
 
-> 测试分层、需求覆盖矩阵（R1–R47）、手工验收清单（M1–M20，需要真实 ftp+nginx/MinIO/三平台实机）与 CI 配置见 [docs/TESTING.md](./docs/TESTING.md)。
+> 测试分层、需求覆盖矩阵（R1–R59）、手工验收清单（M1–M27，需要真实 ftp+nginx/MinIO/两台设备局域网/三平台实机）与 CI 配置见 [docs/TESTING.md](./docs/TESTING.md)。
 
 ## 使用指南
 
@@ -128,6 +133,21 @@ pnpm demo           # 无需 GUI 的全链路演示：创建频道→发布→�
 
 > 私密频道：只有拿到订阅链接（内含随机 accessKey）的人才能读取 `channel.json` 与下载 App。
 > 发布权限由 `channel_pri.json` 授予：**导出管理员配置** 后私下发送给管理员，对方在 AppHub 中 **导入** 即可发布。
+
+### 1.1 更简单：用「本机 Host」分享（无需 FTP/nginx）
+
+如果 App 就在你自己的电脑上，可以直接用 AppHub 内置的 Host Server：
+
+1. **创建频道** → 存储类型选 **本机 Host（local-host）**；
+2. 选择/填写一个本地文件夹作为频道仓库目录（`rootDir`），端口默认 `8787`；
+3. 访问范围默认 **局域网可访问（0.0.0.0）**；仅本机调试可切 `127.0.0.1`。首次启动如弹出系统防火墙提示，请允许专用网络；
+4. 可选填写「对外主机名/IP」或「公开基础地址覆盖」——用于固定分享地址或反向代理；
+5. 创建成功后 Host 会尝试自动启动，也可在频道详情页随时 **启动 / 停止**；
+6. 复制详情页展示的 `channel.json` 订阅链接发给同事（默认是 `http://<你的局域网IP>:8787/channel.json`），对方在 AppHub 中粘贴订阅即可安装/更新。
+
+> Host 只在 AppHub 运行期间有效；停止后订阅链接不可访问，已安装的 App 不受影响。
+> 私密频道的链接包含 `_private/<channelId>/<accessKey>/`，拿到链接即拥有读取权限，请谨慎分享。
+> 需要公网分享时，建议用 nginx 等反向代理加 HTTPS，并把「公开基础地址覆盖」配置为对外域名。
 
 ### 2. 发布 App
 
@@ -166,8 +186,9 @@ pnpm demo           # 无需 GUI 的全链路演示：创建频道→发布→�
 
 | provider | 写入 | 读取 | 典型场景 |
 | --- | --- | --- | --- |
+| `local-host` | 本机目录 | **AppHub 内置 Host Server**（默认局域网可访问） | 无需任何外部服务器，直接分享给同事/局域网 |
 | `ftp-http` | FTP | nginx/静态服务 HTTP | 需求中的 FTP + nginx 组合 |
-| `local` | 本地目录 | 静态服务 HTTP | 局域网共享目录、本机 nginx |
+| `local` | 本地目录 | 静态服务 HTTP | 已有 nginx / 静态服务器的场景 |
 | `s3` | S3 API（minio SDK） | 公开桶 HTTP / 预签名 URL | MinIO、AWS S3、兼容对象存储 |
 
 详见 [docs/STORAGE.md](./docs/STORAGE.md)。新增存储后端只需实现 `StorageAdapter` 接口并在 `packages/storage/src/factory.ts` 注册。
@@ -217,6 +238,7 @@ AppHub/
 - 下载仅允许 http(s)，zip 解压做 zip-slip / 符号链接 / 大小上限防护；安装采用 staging + 校验 + 原子切换；
 - 发布/更新完整性按需求使用 **size + MD5** 校验；MD5 用于检测传输损坏/错版本，不提供防篡改能力，生产环境请使用 HTTPS 并只订阅可信频道；
 - 私密频道的安全性基于能力链接（可选的 nginx Basic Auth 可进一步加强）；发布权限基于 `channel_pri.json` 的持有。
+- 本机 Host（local-host）默认监听 `0.0.0.0`，**同一局域网内的设备可访问**；不需要局域网访问时请切换为「仅本机（127.0.0.1）」。Host 不提供目录列表，拒绝隐藏文件、`channel_pri.json`、路径穿越与符号链接；v1 不内置 TLS/认证，公网暴露请使用反向代理。
 - **公开仓库注意**：`.gitignore` 已忽略 `.env*`、`channel_pri.json`、`.npmrc`、`*.pem/*.key/*.p12` 等敏感文件；请勿把 `channel_pri.json`（含 FTP/S3 凭据）、用户数据目录或本机导出文件提交到公开仓库。若凭据曾误提交，应立即轮换。
 
 ## 路线图

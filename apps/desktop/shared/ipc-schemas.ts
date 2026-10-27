@@ -133,6 +133,35 @@ export const UpdateCheckRequestSchema = z.object({}).strict().optional();
 
 export const VerifyRequestSchema = AppRefRequestSchema;
 
+// ---------------------------------------------------------------------------
+// 本机 Host 配置
+// ---------------------------------------------------------------------------
+
+const HostAdvertiseHostSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .regex(
+    /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/,
+    'advertiseHost 只能是主机名或 IPv4（不含协议、端口、路径）',
+  );
+
+export const HostUpdateConfigRequestSchema = z
+  .object({
+    channelId: ChannelIdSchema,
+    patch: z
+      .object({
+        port: z.number().int().min(1).max(65535).optional(),
+        bindHost: z.enum(['0.0.0.0', '127.0.0.1']).optional(),
+        // 传空字符串表示"清除该可选配置"（core 会把 '' 视为清除 advertiseHost / publicBaseUrl）
+        advertiseHost: HostAdvertiseHostSchema.or(z.literal('')).optional(),
+        publicBaseUrl: OptionalHttpUrl.or(z.literal('')).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
 export type PublishRequestParsed = z.infer<typeof PublishRequestSchema>;
 export type UpdateAppMetaRequestParsed = z.infer<typeof UpdateAppMetaRequestSchema>;
 export type PickKindSchema = PickKind;

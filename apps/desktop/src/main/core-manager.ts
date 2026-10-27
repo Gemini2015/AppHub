@@ -155,6 +155,18 @@ export class CoreManager {
     const core = this.core;
     this.core = null;
     if (!core) return;
+    // 退出前停止本机 Host，释放监听端口（core.close 可能已做同样的事，这里幂等兜底）。
+    try {
+      const host = (core as Partial<AppHubCore>).host;
+      if (host && typeof host.stopAll === 'function') {
+        await host.stopAll();
+        this.logger.info('已停止本机 Host');
+      }
+    } catch (err) {
+      this.logger.warn('停止本机 Host 失败（忽略）', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
     try {
       await core.close();
       this.logger.info('AppHub core 已关闭');

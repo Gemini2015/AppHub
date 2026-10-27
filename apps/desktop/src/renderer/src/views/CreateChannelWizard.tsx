@@ -4,7 +4,15 @@ import { ApiErrorBanner, CheckboxField, InfoBanner, SelectField, TextAreaField, 
 import { Icon } from '../components/Icon';
 import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
-import type { ApiError, ChannelDetailDTO, StorageConfig, StorageProvider, Visibility } from '../types';
+import { bindHostLabel } from '../format';
+import type {
+  ApiError,
+  BindHost,
+  ChannelDetailDTO,
+  StorageConfig,
+  StorageProvider,
+  Visibility,
+} from '../types';
 
 export interface CreateChannelWizardProps {
   onClose: () => void;
@@ -13,6 +21,14 @@ export interface CreateChannelWizardProps {
 
 interface LocalForm {
   rootDir: string;
+  publicBaseUrl: string;
+}
+
+interface LocalHostForm {
+  rootDir: string;
+  port: string;
+  bindHost: BindHost;
+  advertiseHost: string;
   publicBaseUrl: string;
 }
 
@@ -61,9 +77,13 @@ const STEPS = [
 
 const PROVIDER_OPTIONS = [
   { value: 'local', label: '本地目录（local）' },
+  { value: 'local-host', label: '本机 Host（local-host）' },
   { value: 'ftp-http', label: 'FTP + HTTP（ftp-http）' },
   { value: 's3', label: 'S3 / MinIO（s3）' },
 ];
+
+/** advertiseHost 只能是主机名或 IPv4（与协议/主进程 schema 保持一致）。 */
+const ADVERTISE_HOST_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/;
 
 /** 创建频道向导：基础信息 → 存储 provider 配置 → 确认创建（含 probe/进度/错误）。 */
 export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardProps) {
@@ -78,6 +98,14 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
   const [ownerContact, setOwnerContact] = useState('');
   const [provider, setProvider] = useState<StorageProvider>('ftp-http');
   const [local, setLocal] = useState<LocalForm>({ rootDir: '', publicBaseUrl: '' });
+  // 默认对局域网开放（0.0.0.0）：本机 Host 的主要用途是让同一局域网的其他设备订阅。
+  const [localHost, setLocalHost] = useState<LocalHostForm>({
+    rootDir: '',
+    port: '8787',
+    bindHost: '0.0.0.0',
+    advertiseHost: '',
+    publicBaseUrl: '',
+  });
   const [ftp, setFtp] = useState<FtpForm>({
     host: '',
     port: '21',
@@ -119,6 +147,16 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
       if (!local.rootDir.trim()) next.localRootDir = '请输入本地存储根目录';
       if (!local.publicBaseUrl.trim()) next.localPublicBaseUrl = '请输入对外访问的 HTTP 地址';
       else if (!isHttpUrl(local.publicBaseUrl.trim())) next.localPublicBaseUrl = '必须是 http(s) 地址，例如 http://127.0.0.1:8080/app_repo/';
+    } else if (provider === 'local-host') {
+      if (!localHost.rootDir.trim()) next.localHostRootDir = '请选择或输入 Host 仓库根目录';
+      const port = Number.parseInt(localHost.port, 10);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) next.localHostPort = '端口必须是 1-65535 的整数';
+      if (localHost.advertiseHost.trim() && !ADVERTISE_HOST_PATTERN.test(localHost.advertiseHost.trim())) {
+        next.localHostAdvertiseHost = '只能是主机名或 IPv4（不含协议、端口、路径），例如 192.168.1.10';
+      }
+      if (localHost.publicBaseUrl.trim() && !isHttpUrl(localHost.publicBaseUrl.trim())) {
+        next.localHostPublicBaseUrl = '必须是 http(s) 地址，例如 http://192.168.1.10:8787/';
+      }
     } else if (provider === 'ftp-http') {
       if (!ftp.host.trim()) next.ftpHost = '请输入 FTP 主机地址';
       const port = Number.parseInt(ftp.port, 10);
@@ -169,6 +207,16 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
     if (provider === 'local') {
       return { provider: 'local', rootDir: local.rootDir.trim(), publicBaseUrl: local.publicBaseUrl.trim() };
     }
+    if (provider === 'local-host') {
+      return {
+        provider: 'local-host',
+        rootDir: localHost.rootDir.trim(),
+        port: Number.parseInt(localHost.port, 10),
+        bindHost: localHost.bindHost,
+        ...(localHost.advertiseHost.trim() ? { advertiseHost: localHost.advertiseHost.trim() } : {}),
+        ...(localHost.publicBaseUrl.trim() ? { publicBaseUrl: localHost.publicBaseUrl.trim() } : {}),
+      };
+    }
     if (provider === 'ftp-http') {
       return {
         provider: 'ftp-http',
@@ -198,6 +246,19 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
     if (s3.endpoint.trim()) storage.endpoint = s3.endpoint.trim();
     if (s3.publicBaseUrl.trim()) storage.publicBaseUrl = s3.publicBaseUrl.trim();
     return storage;
+  };
+
+  /** 浏览选择 local-host 的仓库根目录（取消不改变已填内容）。 */
+  const browseLocalHostRoot = async () => {
+    const result = await api.system.pickDirectory();
+    if (!result.ok) {
+      toast.error(result.error, '选择目录失败');
+      return;
+    }
+    const picked = result.value;
+    if (!picked) return;
+    setLocalHost((current) => ({ ...current, rootDir: picked }));
+    clearError('localHostRootDir');
   };
 
   const submit = async () => {
@@ -230,6 +291,17 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
         return;
       }
       toast.success(`频道「${result.value.summary.name}」创建成功`);
+      // local-host 频道创建后尽力启动本机 Host；失败只警告，不阻断创建结果。
+      if (provider === 'local-host') {
+        const started = await api.host.start(result.value.summary.id);
+        if (started.ok) {
+          toast.success(`本机 Host 已启动：${started.value.urls.channelUrl}`);
+        } else {
+          toast.warning(
+            `频道已创建，但本机 Host 启动失败：${started.error.message}（${started.error.code}）。可在频道详情页手动启动。`,
+          );
+        }
+      }
       onCreated(result.value);
     } catch {
       const error: ApiError = { code: 'INTERNAL', message: '创建频道时发生未知错误，请查看主进程日志。' };
@@ -447,6 +519,108 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
               </div>
             ) : null}
 
+            {provider === 'local-host' ? (
+              <div className="form-section provider-panel">
+                <div className="field input-with-action">
+                  <TextField
+                    label="Host 仓库根目录（rootDir）"
+                    testId="local-host-root-dir"
+                    value={localHost.rootDir}
+                    onChange={(value) => {
+                      setLocalHost((current) => ({ ...current, rootDir: value }));
+                      clearError('localHostRootDir');
+                    }}
+                    required
+                    placeholder="例如 D:\AppHub\channel-repo 或 /home/alice/apphub-repo"
+                    hint="AppHub 会在这个目录写入 channel.json 与 App 文件，并且只对外提供该目录下的文件。"
+                    error={errors.localHostRootDir}
+                    disabled={submitting}
+                    mono
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    data-testid="local-host-browse-root"
+                    onClick={() => void browseLocalHostRoot()}
+                    disabled={submitting}
+                  >
+                    <Icon name="folder" size={16} />
+                    浏览…
+                  </button>
+                </div>
+
+                <div className="grid grid-2">
+                  <TextField
+                    label="Host 端口"
+                    testId="local-host-port"
+                    value={localHost.port}
+                    onChange={(value) => {
+                      setLocalHost((current) => ({ ...current, port: value }));
+                      clearError('localHostPort');
+                    }}
+                    required
+                    type="number"
+                    placeholder="8787"
+                    hint="默认 8787；如果端口被占用，启动时会报错，可在这里换一个。"
+                    error={errors.localHostPort}
+                    disabled={submitting}
+                    mono
+                  />
+                  <SelectField
+                    label="访问范围"
+                    testId="local-host-bind-host"
+                    value={localHost.bindHost}
+                    onChange={(value) =>
+                      setLocalHost((current) => ({
+                        ...current,
+                        bindHost: value === '127.0.0.1' ? '127.0.0.1' : '0.0.0.0',
+                      }))
+                    }
+                    options={[
+                      { value: '0.0.0.0', label: '局域网可访问（0.0.0.0，推荐）' },
+                      { value: '127.0.0.1', label: '仅本机（127.0.0.1，调试用）' },
+                    ]}
+                    required
+                    hint="0.0.0.0 允许同一局域网的设备订阅；127.0.0.1 只在本机可访问。"
+                    disabled={submitting}
+                  />
+                  <TextField
+                    label="对外主机名（advertiseHost，可选）"
+                    value={localHost.advertiseHost}
+                    onChange={(value) => {
+                      setLocalHost((current) => ({ ...current, advertiseHost: value }));
+                      clearError('localHostAdvertiseHost');
+                    }}
+                    placeholder="例如 192.168.1.10 或 my-pc.local"
+                    hint="用于生成订阅 URL 的主机名/IPv4；留空则自动使用本机检测到的地址。"
+                    error={errors.localHostAdvertiseHost}
+                    disabled={submitting}
+                    mono
+                  />
+                  <TextField
+                    label="公开基地址（publicBaseUrl，可选）"
+                    value={localHost.publicBaseUrl}
+                    onChange={(value) => {
+                      setLocalHost((current) => ({ ...current, publicBaseUrl: value }));
+                      clearError('localHostPublicBaseUrl');
+                    }}
+                    type="url"
+                    placeholder="例如 https://apphub.example.com/"
+                    hint="反向代理/自定义域名场景下完整覆盖订阅地址；留空使用 Host 自动生成的地址。"
+                    error={errors.localHostPublicBaseUrl}
+                    disabled={submitting}
+                    mono
+                  />
+                </div>
+
+                <InfoBanner tone="warn" title="注意：默认对局域网开放">
+                  默认绑定 <code>0.0.0.0</code>，同一局域网的设备都能访问这个频道；只想本机调试请选择「仅本机」。
+                  Windows / macOS 首次启动 Host 时可能弹出防火墙授权，需要允许「专用网络 / 本地网络」；其他设备打不开时请优先检查防火墙。
+                  Host 只在 AppHub 运行期间有效，关闭 App 后订阅链接会失效；私密频道的链接包含 accessKey，拿到链接即等同读取授权。
+                </InfoBanner>
+              </div>
+            ) : null}
+
             {provider === 'ftp-http' ? (
               <div className="form-section provider-panel">
                 <div className="grid grid-2">
@@ -658,6 +832,33 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
                     </div>
                   </>
                 ) : null}
+                {provider === 'local-host' ? (
+                  <>
+                    <div>
+                      <dt>Host 仓库根目录</dt>
+                      <dd className="mono">{localHost.rootDir.trim() || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>监听地址</dt>
+                      <dd className="mono">
+                        {localHost.bindHost}:{localHost.port}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>访问范围</dt>
+                      <dd>{bindHostLabel(localHost.bindHost)}</dd>
+                    </div>
+                    <div>
+                      <dt>对外地址</dt>
+                      <dd className="mono">
+                        {localHost.publicBaseUrl.trim() ||
+                          (localHost.advertiseHost.trim()
+                            ? `http://${localHost.advertiseHost.trim()}:${localHost.port}/`
+                            : '自动检测本机地址')}
+                      </dd>
+                    </div>
+                  </>
+                ) : null}
                 {provider === 'ftp-http' ? (
                   <>
                     <div>
@@ -689,6 +890,12 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
                 ) : null}
               </dl>
             </div>
+            {provider === 'local-host' ? (
+              <InfoBanner tone="warn" title="创建成功后会自动尝试启动本机 Host">
+                频道创建完成后会立即启动 Host 并在 App 运行期间提供订阅地址（默认对局域网开放）。如果启动失败（例如端口被占用或防火墙拦截），
+                频道仍会创建成功，可以在「频道详情 → 本机 Host」面板中修改配置后手动启动。
+              </InfoBanner>
+            ) : null}
             <InfoBanner tone="info" title="创建时会做什么">
               生成频道 ID（私密频道还会生成 accessKey）→ 连接存储并探测（probe，可能需要几秒）→ 写入
               channel.json → 在本机加密保存 channel_pri.json。

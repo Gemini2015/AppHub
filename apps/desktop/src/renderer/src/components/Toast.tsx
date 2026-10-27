@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Icon } from './Icon';
 import type { ApiError } from '../types';
 
-export type ToastKind = 'success' | 'error' | 'info';
+export type ToastKind = 'success' | 'error' | 'info' | 'warning';
 
 export interface ToastItem {
   id: number;
@@ -16,6 +16,7 @@ export interface ToastApi {
   push(input: { kind: ToastKind; message: string; code?: string }): void;
   success(message: string): void;
   info(message: string): void;
+  warning(message: string): void;
   error(error: ApiError, prefix?: string): void;
 }
 
@@ -27,7 +28,7 @@ export function useToast(): ToastApi {
   return toast;
 }
 
-const TOAST_DURATION = { success: 3500, info: 4000, error: 7000 } as const;
+const TOAST_DURATION = { success: 3500, info: 4000, warning: 6000, error: 7000 } as const;
 
 /** 全局 toast 堆栈：成功/失败/提示均带图标，错误额外展示 error.code。 */
 export function ToastProvider({ children }: { children: ReactNode }) {
@@ -62,6 +63,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       push,
       success: (message: string) => push({ kind: 'success', message }),
       info: (message: string) => push({ kind: 'info', message }),
+      warning: (message: string) => push({ kind: 'warning', message }),
       error: (error: ApiError, prefix?: string) =>
         push({ kind: 'error', message: prefix ? `${prefix}：${error.message}` : error.message, code: error.code }),
     }),
@@ -80,7 +82,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           >
             <span className="toast-icon">
               <Icon
-                name={item.kind === 'success' ? 'check-circle' : item.kind === 'error' ? 'x-circle' : 'info'}
+                name={
+                  item.kind === 'success'
+                    ? 'check-circle'
+                    : item.kind === 'error'
+                      ? 'x-circle'
+                      : item.kind === 'warning'
+                        ? 'alert'
+                        : 'info'
+                }
                 size={18}
               />
             </span>

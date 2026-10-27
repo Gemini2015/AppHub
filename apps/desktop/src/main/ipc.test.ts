@@ -33,7 +33,7 @@ vi.mock('electron', () => ({
 }));
 
 import { IPC_CHANNELS, IPC_EVENTS } from '../../shared/ipc';
-import { buildPublishInput, createIpcRouter, registerIpcHandlers, toChannelSummary } from './ipc';
+import { buildPublishInput, createIpcRouter, registerIpcHandlers, toChannelSummary, toHostStatus } from './ipc';
 import type { IpcEventLike, IpcRouterContext } from './ipc';
 import { SelectionRegistry } from './selection-registry';
 import { createSenderPolicy } from './sender';
@@ -182,6 +182,30 @@ function installResult(): any {
   return { app: installedApp(), downloadedBytes: 4, reusedBytes: 0 };
 }
 
+function hostUrls(overrides: Record<string, unknown> = {}): any {
+  return {
+    channelUrl: 'https://example.com/channel.json',
+    localChannelUrl: 'http://127.0.0.1:8787/channel.json',
+    lanChannelUrls: ['http://192.168.1.5:8787/channel.json'],
+    ...overrides,
+  };
+}
+
+function hostStatus(overrides: Record<string, unknown> = {}): any {
+  return {
+    channelId: CHANNEL_ID,
+    channelName: '测试频道',
+    visibility: 'public',
+    running: true,
+    configuredPort: 8787,
+    port: 8787,
+    bindHost: '0.0.0.0',
+    urls: hostUrls(),
+    startedAt: ISO,
+    ...overrides,
+  };
+}
+
 function makeCore(overrides: Record<string, any> = {}): any {
   const core = {
     dataDir: path.resolve('.tmp-test-data'),
@@ -197,6 +221,14 @@ function makeCore(overrides: Record<string, any> = {}): any {
       importPrivateConfig: vi.fn(async () => channelDetail()),
       exportPrivateConfig: vi.fn(async () => '{"schemaVersion":1}'),
       getSubscribeUrl: vi.fn(async () => 'https://example.com/channel.json'),
+    },
+    host: {
+      start: vi.fn(async () => hostStatus()),
+      stop: vi.fn(async () => hostStatus({ running: false, port: null, startedAt: undefined })),
+      status: vi.fn(async () => hostStatus()),
+      list: vi.fn(async () => [hostStatus()]),
+      updateConfig: vi.fn(async () => hostStatus({ configuredPort: 9000 })),
+      stopAll: vi.fn(async () => undefined),
     },
     publishing: {
       getApp: vi.fn(async () => appDetail()),
@@ -821,6 +853,238 @@ describe('ipc：system.openDataDir', () => {
       ok: false,
       error: { code: 'IO' },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// system.pickDirectory
+// ---------------------------------------------------------------------------
+
+describe('ipc：system.pickDirectory', () => {
+  it('取消时返回 ok:true + null，并携带目录选择参数', async () => {
+    const harness = makeHarness();
+    h.openDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+    const result = await call(harness, IPC_CHANNELS.systemPickDirectory);
+    expect(result).toEqual({ ok: true, value: null });
+    expect(h.openDialog).toHaveBeenCalledTimes(1);
+    expect(h.openDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: '选择频道本地存储目录',
+        properties: expect.arrayContaining(['openDirectory', 'createDirectory']),
+      }),
+    );
+  });
+
+  it('用户选中目录时返回绝对路径', async () => {
+    const harness = makeHarness();
+    h.openDialog.mockResolvedValue({ canceled: false, filePaths: [tempDir] });
+    await expect(call(harness, IPC_CHANNELS.systemPickDirectory)).resolves.toEqual({
+      ok: true,
+      value: tempDir,
+    });
+  });
+
+  it('canceled=false 但 filePaths 为空时返回 null（不抛错）', async () => {
+    const harness = makeHarness();
+    h.openDialog.mockResolvedValue({ canceled: false, filePaths: [] });
+    await expect(call(harness, IPC_CHANNELS.systemPickDirectory)).resolves.toEqual({
+      ok: true,
+      value: null,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// host（本机 Host）
+// ---------------------------------------------------------------------------
+
+describe('ipc：host', () => {
+  it('toHostStatus 纯映射：urls 拷贝、lastError -> ApiError、undefined 字段省略', () => {
+    const source = hostStatus({
+      startedAt: undefined,
+      lastError: { code: 'NETWORK', message: '端口被占用' },
+    });
+    const dto = toHostStatus(source);
+    expect(dto).toMatchObject({
+      channelId: CHANNEL_ID,
+      channelName: '测试频道',
+      visibility: 'public',
+      running: true,
+      configuredPort: 8787,
+      port: 8787,
+      bindHost: '0.0.0.0',
+    });
+    expect(dto.lastError).toEqual({ code: 'NETWORK', message: '端口被占用' });
+    expect(dto).not.toHaveProperty('startedAt');
+    // 数组/对象不能与 core 内部状态共享引用
+    expect(dto.urls).not.toBe(source.urls);
+    expect(dto.urls.lanChannelUrls).not.toBe(source.urls.lanChannelUrls);
+    expect(dto.urls.lanChannelUrls).toEqual(source.urls.lanChannelUrls);
+  });
+
+  it('host.status 调用 core 并映射 DTO（查询不广播 data-changed）', async () => {
+    const harness = makeHarness();
+    const result = await call(harness, IPC_CHANNELS.hostStatus, { channelId: CHANNEL_ID });
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        channelId: CHANNEL_ID,
+        running: true,
+        configuredPort: 8787,
+        port: 8787,
+        bindHost: '0.0.0.0',
+      },
+    });
+    expect(result.value.urls.localChannelUrl).toBe('http://127.0.0.1:8787/channel.json');
+    expect(harness.core.host.status).toHaveBeenCalledWith(CHANNEL_ID);
+    expect(harness.targets[0]?.sent.filter((event) => event.channel === IPC_EVENTS.dataChanged)).toHaveLength(0);
+  });
+
+  it('host.start 成功后广播 data-changed（domain=host）', async () => {
+    const harness = makeHarness();
+    const result = await call(harness, IPC_CHANNELS.hostStart, { channelId: CHANNEL_ID });
+    expect(result).toMatchObject({ ok: true, value: { running: true, port: 8787 } });
+    expect(harness.core.host.start).toHaveBeenCalledWith(CHANNEL_ID);
+    const changed = (harness.targets[0]?.sent ?? []).filter((event) => event.channel === IPC_EVENTS.dataChanged);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]?.data).toEqual({ domain: 'host', channelId: CHANNEL_ID });
+  });
+
+  it('host.stop 返回停止态（port=null、无 startedAt）并广播', async () => {
+    const harness = makeHarness();
+    const result = await call(harness, IPC_CHANNELS.hostStop, { channelId: CHANNEL_ID });
+    expect(result).toMatchObject({ ok: true, value: { running: false, port: null } });
+    expect(result.value).not.toHaveProperty('startedAt');
+    expect(harness.core.host.stop).toHaveBeenCalledWith(CHANNEL_ID);
+    const changed = (harness.targets[0]?.sent ?? []).filter((event) => event.channel === IPC_EVENTS.dataChanged);
+    expect(changed[0]?.data).toEqual({ domain: 'host', channelId: CHANNEL_ID });
+  });
+
+  it('host.list 映射全部状态（含已停止）', async () => {
+    const harness = makeHarness();
+    harness.core.host.list.mockResolvedValue([
+      hostStatus(),
+      hostStatus({
+        channelId: 'ch_fedcba9876543210',
+        channelName: '第二个频道',
+        running: false,
+        port: null,
+        startedAt: undefined,
+      }),
+    ]);
+    const result = await call(harness, IPC_CHANNELS.hostList);
+    expect(result.ok).toBe(true);
+    expect(result.value).toHaveLength(2);
+    expect(result.value[1]).toMatchObject({
+      channelId: 'ch_fedcba9876543210',
+      channelName: '第二个频道',
+      running: false,
+      port: null,
+    });
+  });
+
+  it('host.updateConfig 透传 patch 并广播', async () => {
+    const harness = makeHarness();
+    const patch = {
+      port: 9000,
+      bindHost: '127.0.0.1',
+      advertiseHost: '192.168.1.10',
+      publicBaseUrl: 'http://192.168.1.10:9000/',
+    };
+    const result = await call(harness, IPC_CHANNELS.hostUpdateConfig, { channelId: CHANNEL_ID, patch });
+    expect(result).toMatchObject({ ok: true, value: { configuredPort: 9000 } });
+    expect(harness.core.host.updateConfig).toHaveBeenCalledWith(CHANNEL_ID, patch);
+    const changed = (harness.targets[0]?.sent ?? []).filter((event) => event.channel === IPC_EVENTS.dataChanged);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]?.data).toEqual({ domain: 'host', channelId: CHANNEL_ID });
+  });
+
+  it('host.updateConfig 允许 advertiseHost: ""（清除对外主机名）并透传 core', async () => {
+    const harness = makeHarness();
+    const result = await call(harness, IPC_CHANNELS.hostUpdateConfig, {
+      channelId: CHANNEL_ID,
+      patch: { advertiseHost: '' },
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(harness.core.host.updateConfig).toHaveBeenCalledWith(CHANNEL_ID, { advertiseHost: '' });
+    const changed = (harness.targets[0]?.sent ?? []).filter((event) => event.channel === IPC_EVENTS.dataChanged);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]?.data).toEqual({ domain: 'host', channelId: CHANNEL_ID });
+  });
+
+  it('host.updateConfig 允许 publicBaseUrl: ""（清除公开地址）并透传 core', async () => {
+    const harness = makeHarness();
+    const result = await call(harness, IPC_CHANNELS.hostUpdateConfig, {
+      channelId: CHANNEL_ID,
+      patch: { publicBaseUrl: '' },
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(harness.core.host.updateConfig).toHaveBeenCalledWith(CHANNEL_ID, { publicBaseUrl: '' });
+  });
+
+  it('core 抛 AppError 时透传错误码且不广播 data-changed', async () => {
+    const harness = makeHarness();
+    harness.core.host.start.mockRejectedValue(new AppError('UNSUPPORTED', '仅支持 local-host 频道'));
+    const result = await call(harness, IPC_CHANNELS.hostStart, { channelId: CHANNEL_ID });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'UNSUPPORTED', message: '仅支持 local-host 频道' },
+    });
+    expect(harness.targets[0]?.sent.filter((event) => event.channel === IPC_EVENTS.dataChanged)).toHaveLength(0);
+  });
+
+  it('非法入参被 zod 拒绝且不调用 core（多余字段/port 越界/advertiseHost 带协议/bindHost 非法）', async () => {
+    const harness = makeHarness();
+    const invalid: { channel: string; payload: unknown }[] = [
+      { channel: IPC_CHANNELS.hostStart, payload: { channelId: CHANNEL_ID, extra: true } },
+      { channel: IPC_CHANNELS.hostStop, payload: { channelId: 'bad' } },
+      { channel: IPC_CHANNELS.hostStatus, payload: { channelId: CHANNEL_ID, extra: 1 } },
+      { channel: IPC_CHANNELS.hostList, payload: { sneaky: true } },
+      { channel: IPC_CHANNELS.hostUpdateConfig, payload: { channelId: CHANNEL_ID, patch: { port: 0 } } },
+      { channel: IPC_CHANNELS.hostUpdateConfig, payload: { channelId: CHANNEL_ID, patch: { port: 70000 } } },
+      { channel: IPC_CHANNELS.hostUpdateConfig, payload: { channelId: CHANNEL_ID, patch: { port: 1.5 } } },
+      {
+        channel: IPC_CHANNELS.hostUpdateConfig,
+        payload: { channelId: CHANNEL_ID, patch: { advertiseHost: 'http://evil.example' } },
+      },
+      {
+        channel: IPC_CHANNELS.hostUpdateConfig,
+        payload: { channelId: CHANNEL_ID, patch: { advertiseHost: 'host:8080' } },
+      },
+      {
+        channel: IPC_CHANNELS.hostUpdateConfig,
+        payload: { channelId: CHANNEL_ID, patch: { advertiseHost: '   ' } },
+      },
+      {
+        channel: IPC_CHANNELS.hostUpdateConfig,
+        payload: { channelId: CHANNEL_ID, patch: { publicBaseUrl: 123 } },
+      },
+      {
+        channel: IPC_CHANNELS.hostUpdateConfig,
+        payload: { channelId: CHANNEL_ID, patch: { bindHost: '192.168.1.2' } },
+      },
+      {
+        channel: IPC_CHANNELS.hostUpdateConfig,
+        payload: { channelId: CHANNEL_ID, patch: { publicBaseUrl: 'ftp://example.com/' } },
+      },
+      {
+        channel: IPC_CHANNELS.hostUpdateConfig,
+        payload: { channelId: CHANNEL_ID, patch: { rootDir: '/tmp/repo' } },
+      },
+      { channel: IPC_CHANNELS.hostUpdateConfig, payload: { channelId: CHANNEL_ID, patch: {}, extra: 1 } },
+    ];
+    for (const entry of invalid) {
+      const result = await call(harness, entry.channel, entry.payload);
+      expect(result, `${entry.channel} 应拒绝 ${JSON.stringify(entry.payload)}`).toMatchObject({
+        ok: false,
+        error: { code: 'VALIDATION' },
+      });
+    }
+    expect(harness.core.host.start).not.toHaveBeenCalled();
+    expect(harness.core.host.stop).not.toHaveBeenCalled();
+    expect(harness.core.host.status).not.toHaveBeenCalled();
+    expect(harness.core.host.list).not.toHaveBeenCalled();
+    expect(harness.core.host.updateConfig).not.toHaveBeenCalled();
   });
 });
 

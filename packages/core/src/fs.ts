@@ -10,17 +10,56 @@ import { AppError, normalizeRelativePath, randomHex } from '@apphub/protocol';
  * 必须经过 safeJoin，确保不会逃出 dataDir。
  */
 
-/** 原子写入任意内容（tmp + rename）。 */
+/** Windows 上 rename 替换目标时可能因短暂占用（杀软/索引器/其它句柄）返回的可重试错误码。 */
+const RETRYABLE_RENAME_ERROR_CODES = new Set(['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY']);
+/** rename 重试次数与退避基数（10ms、20ms、30ms、40ms，总计约 100ms）。 */
+const RENAME_RETRY_ATTEMPTS = 5;
+const RENAME_RETRY_BASE_DELAY_MS = 10;
+
+function delay(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * rename 替换目标文件；对 Windows 上短暂的文件占用做有限重试。
+ * 只重试明确的占用类错误，其它错误（如 ENOENT/EXDEV）立即抛出。
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= RENAME_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (error) {
+      lastError = error;
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      const retryable = code !== undefined && RETRYABLE_RENAME_ERROR_CODES.has(code);
+      if (!retryable || attempt === RENAME_RETRY_ATTEMPTS) break;
+      await delay(RENAME_RETRY_BASE_DELAY_MS * attempt);
+    }
+  }
+  throw lastError;
+}
+
+/** 原子写入任意内容（tmp + rename；rename 对 Windows 占用做有限重试）。 */
 export async function writeFileAtomic(filePath: string, data: string | Uint8Array): Promise<void> {
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
   const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${randomHex(4)}.tmp`);
   try {
     await fs.writeFile(tmpPath, data);
-    await fs.rename(tmpPath, filePath);
+    await renameWithRetry(tmpPath, filePath);
   } catch (error) {
-    await removePath(tmpPath);
-    throw AppError.from(error, 'IO');
+    await removePath(tmpPath).catch(() => undefined);
+    const errno = (error as NodeJS.ErrnoException | undefined)?.code;
+    const detail = errno ? `（${errno}）` : '';
+    throw new AppError(
+      'IO',
+      `原子写入失败${detail}：${path.basename(filePath)}（${AppError.from(error).message}）`,
+      { code: errno },
+    );
   }
 }
 

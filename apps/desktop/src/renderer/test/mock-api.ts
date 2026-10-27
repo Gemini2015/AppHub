@@ -15,6 +15,7 @@ import type {
   ChannelDetailDTO,
   ChannelSummaryDTO,
   DataChangedEventDTO,
+  HostStatusDTO,
   InstallResultDTO,
   InstalledAppDTO,
   PublishResultDTO,
@@ -30,6 +31,9 @@ export const NOW = '2026-01-03T00:00:00.000Z';
 export const EARLIER = '2026-01-01T00:00:00.000Z';
 export const SUBSCRIBE_URL = 'http://127.0.0.1:8080/app_repo/channel.json';
 export const META_URL = 'foobar/app.meta.json';
+export const HOST_LAN_URL = 'http://192.168.1.10:8787/channel.json';
+export const HOST_LOCAL_URL = 'http://127.0.0.1:8787/channel.json';
+export const PICKED_DIR = 'D:/AppHub/channel-repo';
 
 type Platform = AppSummaryDTO['platforms'][number];
 
@@ -267,6 +271,35 @@ export function makeProgressEvent(overrides: Partial<ProgressEventDTO> = {}): Pr
   };
 }
 
+/** 停止状态的本机 Host（默认 bindHost = 0.0.0.0，局域网可访问）。 */
+export function makeHostStatus(overrides: Partial<HostStatusDTO> = {}): HostStatusDTO {
+  return {
+    channelId: CHANNEL_ID,
+    channelName: '示例频道',
+    visibility: 'public',
+    running: false,
+    configuredPort: 8787,
+    port: null,
+    bindHost: '0.0.0.0',
+    urls: {
+      channelUrl: HOST_LAN_URL,
+      localChannelUrl: HOST_LOCAL_URL,
+      lanChannelUrls: [HOST_LAN_URL],
+    },
+    ...overrides,
+  };
+}
+
+/** 运行状态的本机 Host。 */
+export function makeRunningHostStatus(overrides: Partial<HostStatusDTO> = {}): HostStatusDTO {
+  return makeHostStatus({
+    running: true,
+    port: 8787,
+    startedAt: NOW,
+    ...overrides,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // mock API
 // ---------------------------------------------------------------------------
@@ -275,6 +308,7 @@ export interface MockApiOptions {
   system?: Partial<AppHubApi['system']>;
   channels?: Partial<AppHubApi['channels']>;
   apps?: Partial<AppHubApi['apps']>;
+  host?: Partial<AppHubApi['host']>;
   publish?: Partial<AppHubApi['publish']>;
   library?: Partial<AppHubApi['library']>;
   events?: Partial<AppHubApi['events']>;
@@ -293,6 +327,7 @@ export function createMockApi(options: MockApiOptions = {}): MockAppHubApi {
     system: {
       info: vi.fn(async () => ok(makeSystemInfo())),
       openDataDir: vi.fn(async () => ok(undefined)),
+      pickDirectory: vi.fn(async () => ok(PICKED_DIR)),
     },
     channels: {
       list: vi.fn(async () => ok([makeChannelSummary()])),
@@ -309,6 +344,15 @@ export function createMockApi(options: MockApiOptions = {}): MockAppHubApi {
     },
     apps: {
       get: vi.fn(async () => ok(makeAppDetail())),
+    },
+    // 默认假设频道不是 local-host（status 返回 UNSUPPORTED），HostPanel 会静默隐藏；
+    // 需要 Host 面板的测试显式覆盖 status/start/stop/updateConfig。
+    host: {
+      start: vi.fn(async () => ok(makeRunningHostStatus())),
+      stop: vi.fn(async () => ok(makeHostStatus())),
+      status: vi.fn(async () => fail('UNSUPPORTED', '该频道不是本机 Host 频道')),
+      list: vi.fn(async () => ok([])),
+      updateConfig: vi.fn(async () => ok(makeHostStatus())),
     },
     publish: {
       pick: vi.fn(async () =>
@@ -365,6 +409,7 @@ export function createMockApi(options: MockApiOptions = {}): MockAppHubApi {
     system: { ...base.system, ...options.system },
     channels: { ...base.channels, ...options.channels },
     apps: { ...base.apps, ...options.apps },
+    host: { ...base.host, ...options.host },
     publish: { ...base.publish, ...options.publish },
     library: { ...base.library, ...options.library },
     events: { ...base.events, ...options.events },

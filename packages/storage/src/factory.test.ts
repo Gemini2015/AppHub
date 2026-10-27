@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { AppError, isAppError } from '@apphub/protocol';
-import type { FtpHttpStorageConfig, LocalStorageConfig, S3StorageConfig, StorageConfig } from '@apphub/protocol';
+import type {
+  FtpHttpStorageConfig,
+  LocalHostStorageConfig,
+  LocalStorageConfig,
+  S3StorageConfig,
+  StorageConfig,
+} from '@apphub/protocol';
 import { FtpHttpStorageAdapter } from './adapters/ftp-http';
+import { LocalHostStorageAdapter } from './adapters/local-host';
 import { LocalStorageAdapter } from './adapters/local';
 import { S3StorageAdapter } from './adapters/s3';
 import { createStorageAdapter, createStorageFactory } from './factory';
@@ -10,6 +17,13 @@ const localConfig: LocalStorageConfig = {
   provider: 'local',
   rootDir: 'E:\\tmp\\apphub-test-repo',
   publicBaseUrl: 'http://127.0.0.1:8080/app_repo/',
+};
+
+const localHostConfig: LocalHostStorageConfig = {
+  provider: 'local-host',
+  rootDir: 'E:\\tmp\\apphub-host-repo',
+  port: 8787,
+  bindHost: '0.0.0.0',
 };
 
 const ftpHttpConfig: FtpHttpStorageConfig = {
@@ -57,6 +71,11 @@ describe('storage factory', () => {
     expect(local.provider).toBe('local');
     expect(local.config).toBe(localConfig);
 
+    const localHost = createStorageAdapter(localHostConfig);
+    expect(localHost).toBeInstanceOf(LocalHostStorageAdapter);
+    expect(localHost.provider).toBe('local-host');
+    expect(localHost.config).toBe(localHostConfig);
+
     const ftp = createStorageAdapter(ftpHttpConfig);
     expect(ftp).toBeInstanceOf(FtpHttpStorageAdapter);
     expect(ftp.provider).toBe('ftp-http');
@@ -73,6 +92,25 @@ describe('storage factory', () => {
     expect(first).toBeInstanceOf(S3StorageAdapter);
     expect(second).toBeInstanceOf(S3StorageAdapter);
     expect(first).not.toBe(second);
+
+    const hostFirst = factory.create(localHostConfig);
+    const hostSecond = factory.create(localHostConfig);
+    expect(hostFirst).toBeInstanceOf(LocalHostStorageAdapter);
+    expect(hostSecond).toBeInstanceOf(LocalHostStorageAdapter);
+    expect(hostFirst).not.toBe(hostSecond);
+  });
+
+  it('local-host 适配器由工厂创建：provider 正确、getDownloadUrl 使用推导出的本机地址', async () => {
+    const adapter = createStorageAdapter(localHostConfig);
+    try {
+      // 真正的读写由 core/book 测试覆盖；这里只断言工厂产物具备 local-host 的 provider 与 URL 语义
+      expect(adapter.provider).toBe('local-host');
+      expect(adapter).toBeInstanceOf(LocalHostStorageAdapter);
+      const url = await adapter.getDownloadUrl('channel.json');
+      expect(url).toMatch(/^http:\/\/[^/]+:8787\/channel\.json$/);
+    } finally {
+      await adapter.close();
+    }
   });
 
   it('未知 provider 抛 UNSUPPORTED（防御性分支）', () => {
@@ -90,6 +128,9 @@ describe('storage factory', () => {
   it('非法配置在创建阶段抛 VALIDATION（无需网络）', () => {
     const invalidConfigs: StorageConfig[] = [
       { ...localConfig, rootDir: '' },
+      { ...localHostConfig, rootDir: '' },
+      { ...localHostConfig, publicBaseUrl: 'ftp://not-http/' },
+      { ...localHostConfig, port: 0 },
       { ...s3Config, bucket: '' },
       { ...s3Config, prefix: '../escape/' },
       { ...ftpHttpConfig, ftp: { ...ftpHttpConfig.ftp, rootDir: '../escape' } },
@@ -112,5 +153,13 @@ describe('storage factory', () => {
       prefix: '',
     };
     expect(createStorageAdapter(parsed)).toBeInstanceOf(S3StorageAdapter);
+
+    const parsedHost: StorageConfig = {
+      provider: 'local-host',
+      rootDir: 'E:\\tmp\\apphub-host-repo',
+      port: 8787,
+      bindHost: '0.0.0.0',
+    };
+    expect(createStorageAdapter(parsedHost)).toBeInstanceOf(LocalHostStorageAdapter);
   });
 });

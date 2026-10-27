@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { act, render, screen, userEvent, waitFor } from '../test/render';
-import { createMockApi, makeProgressEvent } from '../test/mock-api';
+import { createMockApi, makeHostStatus, makeProgressEvent, makeRunningHostStatus, ok } from '../test/mock-api';
 
 describe('App 外壳', () => {
   it('window.apphub 缺失时显示可读错误而不是白屏', () => {
@@ -57,5 +57,33 @@ describe('App 外壳', () => {
 
     expect(await screen.findByText('37%')).toBeInTheDocument();
     expect(screen.getByText(/发布/)).toBeInTheDocument();
+  });
+
+  it('加载 host.list 并在频道卡片显示 Host 运行徽标', async () => {
+    const api = createMockApi({
+      host: { list: vi.fn().mockResolvedValue(ok([makeRunningHostStatus()])) },
+    });
+    render(<App api={api} />);
+
+    expect(await screen.findByText('示例频道')).toBeInTheDocument();
+    await waitFor(() => expect(api.host.list).toHaveBeenCalled());
+    const badge = await screen.findByTestId('channel-host-badge');
+    expect(badge).toHaveTextContent('Host 运行中');
+  });
+
+  it('data-changed domain=host 时刷新 Host 状态列表与徽标', async () => {
+    const api = createMockApi({
+      host: { list: vi.fn().mockResolvedValue(ok([makeHostStatus()])) },
+    });
+    render(<App api={api} />);
+    await screen.findByText('示例频道');
+    await waitFor(() => expect(api.host.list).toHaveBeenCalledTimes(1));
+    expect(await screen.findByTestId('channel-host-badge')).toHaveTextContent('Host 已停止');
+
+    act(() => {
+      api.emitDataChanged({ domain: 'host', channelId: 'ch_1' });
+    });
+
+    await waitFor(() => expect(api.host.list).toHaveBeenCalledTimes(2));
   });
 });

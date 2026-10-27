@@ -1,6 +1,6 @@
 # AppHub 存储后端（Storage）
 
-> 本文档说明 `@apphub/storage` 支持的三种存储后端（`local` / `ftp-http` / `s3`）的配置字段、
+> 本文档说明 `@apphub/storage` 支持的存储后端（`local-host` / `local` / `ftp-http` / `s3`）的配置字段、
 > 部署方式、安全建议，以及如何扩展新的 provider。
 >
 > 相关文档：[ARCHITECTURE.md](./ARCHITECTURE.md)（模块边界）、[PROTOCOL.md](./PROTOCOL.md)（协议与存储布局）。
@@ -14,6 +14,7 @@ AppHub 是去中心化的：**频道所有者自己的存储就是 App 仓库**�
 
 | provider | 写入方式 | 读取方式 | 典型场景 |
 | --- | --- | --- | --- |
+| `local-host` | 直接写本地目录 | **AppHub 内置 Host Server**（默认局域网） | 无需外部服务器，一键分享给同事/局域网 |
 | `ftp-http` | FTP / FTPS 上传 | nginx / 任意静态 HTTP 服务 | 有虚拟主机/对象存储之外的自建服务器；需求中的 "FTP + nginx" |
 | `local` | 直接写本地目录 | nginx / 静态服务器 | 存储与 AppHub 在同一台机器；内网共享目录 |
 | `s3` | S3 API（minio SDK） | 公开桶 HTTP 地址，或预签名 URL | MinIO、AWS S3、阿里云 OSS 等 S3 兼容服务 |
@@ -24,7 +25,7 @@ AppHub 是去中心化的：**频道所有者自己的存储就是 App 仓库**�
 
 ### 1.1 通用概念
 
-- **频道根目录**：由 `ftp.rootDir`、`local.rootDir`、`s3.prefix` 决定，所有 key 都相对于它。
+- **频道根目录**：由 `ftp.rootDir`、`local.rootDir`、`local-host.rootDir`、`s3.prefix` 决定，所有 key 都相对于它。
   例如 `channel.json`、`foobar/app.meta.json`、`foobar/1.0.1/files.json`。
 - **key**：POSIX 相对路径（`/` 分隔）。适配器会校验 key：拒绝 `..`、空字符、Windows 保留名、
   超长路径等；所有错误以 `AppError('SECURITY' | 'VALIDATION')` 抛出。
@@ -357,18 +358,93 @@ mc anonymous set-json /tmp/public-read.json local/apphub
 
 ---
 
-## 5. 选择建议
+## 5. `local-host`：本机内置 Host 服务器
 
-| 场景 | 推荐 |
-| --- | --- |
-| 已有机房/虚拟主机，习惯 FTP 上传 | `ftp-http`（FTP 写 + nginx 读） |
-| AppHub 与发布目录在同一台机器，追求最简单 | `local` + nginx/静态服务 |
-| 希望免运维、可扩展、支持私有桶/预签名 | `s3`（MinIO 自建或云对象存储） |
-| 单元/集成测试 | `memory` 或 testkit 的进程内 FTP/S3 服务器 |
+不需要 FTP、nginx 或云存储：AppHub **主进程内置一个只读 HTTP 文件服务器**，直接托管频道仓库目录，
+适合"我在自己电脑上发布，局域网同事订阅"的场景。
+
+### 5.1 配置字段
+
+| 字段 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `provider` | 是 | — | 固定 `local-host` |
+| `rootDir` | 是 | — | 频道仓库根目录（绝对路径）；目录不存在时 probe 自动创建；**建议使用专用目录** |
+| `port` | 否 | `8787` | Host 监听端口（1–65535）；端口占用时启动报 `CONFLICT` |
+| `bindHost` | 否 | `0.0.0.0` | `0.0.0.0` = 所有网卡（局域网可访问，默认）；`127.0.0.1` = 仅本机调试 |
+| `advertiseHost` | 否 | 自动 | 生成订阅 URL 时使用的对外主机名/IPv4（不含协议/端口/路径）；留空自动取本机局域网 IPv4，离线回退 `127.0.0.1` |
+| `publicBaseUrl` | 否 | — | 完整覆盖公开基础 URL（反向代理/自定义域名，http(s)）；优先级最高 |
+
+示例（channel_pri.json 内的 storage）：
+
+```json
+{
+  "provider": "local-host",
+  "rootDir": "D:/AppHubRepo/example",
+  "port": 8787,
+  "bindHost": "0.0.0.0",
+  "advertiseHost": "192.168.1.20",
+  "publicBaseUrl": "https://apps.example.com/example/"
+}
+```
+
+### 5.2 URL 与订阅机制
+
+- 公开频道订阅地址：`http://<advertiseHost 或局域网IP>:<port>/channel.json`；
+- 私密频道：`http://<host>:<port>/_private/<channelId>/<accessKey>/channel.json`（能力链接）；
+- 优先级：`publicBaseUrl` > `advertiseHost` > 自动局域网 IPv4 > `127.0.0.1`；
+- Host 状态会同时返回**本机 URL 与所有局域网候选 URL**（多网卡时逐个列出），详情页可分别复制；
+- 公开协议文件（channel.json/app.meta.json/files.json）与 `local` provider 完全一致，内部全部使用相对地址，因此更换 Host/端口不影响仓库内容。
+
+### 5.3 使用步骤
+
+1. 创建频道 → 存储类型选「本机 Host（local-host）」；
+2. 选择频道仓库目录（rootDir）、端口（默认 8787）、访问范围（默认局域网）；
+3. 创建成功后 Host 会自动尝试启动；也可在频道详情页手动「启动 / 停止」；
+4. 复制详情页的 `channel.json` 链接给局域网内的同事订阅；
+5. 停止 Host 后链接立即不可用（端口释放），重新启动即恢复；已安装的 App 不受影响。
+
+> Host 只在 AppHub 运行期间有效，不随 App 启动自动恢复，也不做后台常驻/系统服务。
+> 停止状态下可在 Host 面板「编辑配置」修改端口/绑定范围/advertiseHost/publicBaseUrl（rootDir 不可改）。
+
+### 5.4 局域网、防火墙与公网
+
+- 默认 `bindHost: 0.0.0.0`：同一局域网设备可访问；首次启动时 Windows 防火墙会弹窗，请允许**专用网络**；
+- 不需要局域网访问时切换「仅本机（127.0.0.1）」；
+- 多网卡/DHCP 场景建议填写 `advertiseHost` 固定分享地址；
+- 公网分享：在路由器做端口转发，或在本机前置 nginx/Caddy 反向代理：
+  - Host 只监听 HTTP；公网请通过反向代理提供 HTTPS；
+  - 把 `publicBaseUrl` 配置为对外域名（例如 `https://apps.example.com/example/`），AppHub 生成的分享链接会直接使用它；
+  - 私密频道仍依赖能力链接；如需额外保护，可在反向代理层加 IP 白名单 / Basic Auth（注意：订阅端需在「高级」中填写对应请求头）。
+
+### 5.5 安全与限制
+
+- Host 为**只读**静态服务：仅 GET/HEAD，无目录列表；
+- 拒绝：隐藏文件/目录（任一路径段以 `.` 开头）、`channel_pri.json`、`..` 路径穿越、URL 编码穿越、符号链接、目录请求；实际路径需通过 realpath 校验位于 rootDir 内；
+- 响应带 `X-Content-Type-Options: nosniff`；对 JSON/文件使用 `Cache-Control: no-cache`，便于发布后立即生效；
+- v1 仅支持 IPv4；不内置 TLS / Basic Auth / Range 断点续传；
+- `rootDir` 是频道的 webroot，请勿把包含私人文件的目录直接用作频道仓库（Host 不会列出目录，但知道路径即可读取未隐藏文件）；
+- 每个 `local-host` 频道对应一个独立 Host Server 与端口；同一端口不能同时服务两个频道。
+
+### 5.6 测试
+
+存储/核心/E2E 测试均使用本机回环真实 HTTP（`http://127.0.0.1:<port>`），并通过注入 `networkInterfaces` 覆盖局域网 URL 分支；
+`@apphub/testkit` 提供 `getFreePort()` 选择空闲端口，避免测试间端口冲突。
 
 ---
 
-## 6. 如何新增一个 provider
+## 6. 选择建议
+
+| 场景 | 推荐 |
+| --- | --- |
+| 无需外部服务器，局域网快速分享 | `local-host`（AppHub 内置 Host） |
+| 已有机房/虚拟主机，习惯 FTP 上传 | `ftp-http`（FTP 写 + nginx 读） |
+| AppHub 与发布目录在同一台机器，已有 nginx/静态服务 | `local` + nginx/静态服务 |
+| 希望免运维、可扩展、支持私有桶/预签名 | `s3`（MinIO 自建或云对象存储） |
+| 单元/集成测试 | `memory` 或 testkit 的进程内 FTP/S3/HTTP 服务器 |
+
+---
+
+## 7. 如何新增一个 provider
 
 以新增 `webdav` 为例：
 
@@ -389,12 +465,13 @@ mc anonymous set-json /tmp/public-read.json local/apphub
 
 ---
 
-## 7. 测试基础设施（`@apphub/testkit`）
+## 8. 测试基础设施（`@apphub/testkit`）
 
 存储适配器的测试全部离线、使用**真实进程内服务器**（不 mock 协议层）：
 
 | 工具 | 说明 |
 | --- | --- |
+| `getFreePort()` | 获取一个本机空闲端口（监听 0 后立即释放），用于 local-host / Electron E2E 等需要固定端口的测试 |
 | `startFtpTestServer(options?)` | 基于 `ftp-srv` 的进程内 FTP 服务器：临时 rootDir、自定义账号、自动选空闲控制端口与随机被动端口段、`close()` 清理；自动移除 ftp-srv 注册的进程退出信号处理器 |
 | `startS3TestServer(options?)` | 基于 `s3rver` 的进程内 S3 服务器：临时数据目录、预创建桶、随机端口、`close()` 清理；默认凭据 `S3RVER/S3RVER`；支持匿名 GET 与预签名 URL |
 | `startStaticServer(dir)` | 极简只读静态服务器（模拟 nginx），`close()` 会主动断开 keep-alive 连接 |
@@ -419,7 +496,7 @@ try {
 
 ---
 
-## 8. 安全建议
+## 9. 安全建议
 
 1. **凭据只存在于 `channel_pri.json`**：本地用 Electron `safeStorage` 加密保存；导出/分享给管理员时
    走显式操作；不要把密文/明文提交到仓库或写进日志。
@@ -431,6 +508,10 @@ try {
    - S3 使用 HTTPS endpoint；MinIO 生产部署务必启用 TLS。
 4. **只读下载面**：静态服务只允许 `GET/HEAD`；不要把 FTP 账号的写权限给订阅者；`rootDir`
    独立目录、最小权限运行。
+5. **本机 Host（local-host）**：默认 `bindHost: 0.0.0.0` 会向局域网开放频道读取权限；不需要时切
+   `127.0.0.1`。Host 不提供目录列表并拒绝隐藏文件/`channel_pri.json`/穿越/符号链接，但仍建议使用
+   频道专用目录；v1 无内置 TLS/认证，公网分享请通过反向代理 HTTPS + `publicBaseUrl`，并按需加
+   IP 白名单/Basic Auth。停止 Host 即停止对外服务；App 退出会自动停止。
 5. **私密频道**：安全性依赖 `_private/<channelId>/<accessKey>/` 路径的不可猜测性（能力链接）。
    一旦 `accessKey` 泄露等同于读取权限泄露；关闭目录列举、避免把访问日志公开。
 6. **路径安全**：适配器拒绝 `..`、绝对路径、空字符、Windows 保留名等非法 key，并在本地目录
@@ -441,7 +522,7 @@ try {
 
 ---
 
-## 9. 已知限制
+## 10. 已知限制
 
 - **FTP 仅支持被动模式**：`passive: false` 会返回 `UNSUPPORTED`；公网部署务必配置被动端口范围。
 - **FTP 错误语义模糊**：550 同时表示"不存在/无权限"；读取类方法按"不存在"处理（契约要求），

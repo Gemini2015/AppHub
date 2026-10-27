@@ -16,13 +16,15 @@ export function Badge({
   children,
   tone = 'muted',
   icon,
+  testId,
 }: {
   children: ReactNode;
   tone?: BadgeTone;
   icon?: IconName;
+  testId?: string;
 }) {
   return (
-    <span className={`badge badge-${tone}`}>
+    <span className={`badge badge-${tone}`} data-testid={testId}>
       {icon ? <Icon name={icon} size={12} /> : null}
       {children}
     </span>

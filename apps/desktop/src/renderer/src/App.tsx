@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { getRuntimeApi, useApi } from './api';
 import { ApiProvider } from './components/ApiProvider';
@@ -12,6 +12,7 @@ import type {
   AppHubApi,
   ChannelDetailDTO,
   ChannelSummaryDTO,
+  HostStatusDTO,
   SystemInfoDTO,
 } from './types';
 import { AppDetailView } from './views/AppDetailView';
@@ -56,6 +57,7 @@ function AppShell() {
   const [channelsLoading, setChannelsLoading] = useState(true);
   const [channelsRefreshing, setChannelsRefreshing] = useState(false);
   const [channelsError, setChannelsError] = useState<ApiError | null>(null);
+  const [hostStatuses, setHostStatuses] = useState<HostStatusDTO[]>([]);
   const [systemInfo, setSystemInfo] = useState<SystemInfoDTO | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
@@ -87,10 +89,17 @@ function AppShell() {
     if (result.ok) setSystemInfo(result.value);
   }, [api]);
 
+  /** 加载本机 Host 列表（用于频道卡片徽标；非 local-host 频道不会出现在这里）。 */
+  const loadHostStatuses = useCallback(async () => {
+    const result = await api.host.list();
+    if (result.ok) setHostStatuses(result.value);
+  }, [api]);
+
   useEffect(() => {
     void loadChannels();
     void loadSystemInfo();
-  }, [loadChannels, loadSystemInfo]);
+    void loadHostStatuses();
+  }, [loadChannels, loadSystemInfo, loadHostStatuses]);
 
   // 订阅主进程数据变更事件：刷新相关视图（列表/计数/详情通过 dataVersion 重新拉取）。
   useEffect(() => {
@@ -98,13 +107,20 @@ function AppShell() {
       setDataVersion((current) => current + 1);
       if (event.domain === 'channels' || event.domain === 'apps') void loadChannels('refresh');
       if (event.domain === 'library') void loadSystemInfo();
+      if (event.domain === 'host') void loadHostStatuses();
     });
     return unsubscribe;
-  }, [api, loadChannels, loadSystemInfo]);
+  }, [api, loadChannels, loadSystemInfo, loadHostStatuses]);
 
   const refreshAllData = useCallback(async () => {
-    await Promise.all([loadChannels('refresh'), loadSystemInfo()]);
-  }, [loadChannels, loadSystemInfo]);
+    await Promise.all([loadChannels('refresh'), loadSystemInfo(), loadHostStatuses()]);
+  }, [loadChannels, loadSystemInfo, loadHostStatuses]);
+
+  const hostStatusMap = useMemo(() => {
+    const map: Record<string, HostStatusDTO> = {};
+    for (const host of hostStatuses) map[host.channelId] = host;
+    return map;
+  }, [hostStatuses]);
 
   const navigate = (next: Route) => {
     setRoute(next);
@@ -120,6 +136,7 @@ function AppShell() {
         loading={channelsLoading && channels === null}
         error={channelsError}
         refreshing={channelsRefreshing}
+        hostStatuses={hostStatusMap}
         onRetry={() => void loadChannels('initial')}
         onRefresh={() => void loadChannels('refresh')}
         onCreate={() => setCreateOpen(true)}
