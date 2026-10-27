@@ -113,7 +113,7 @@ export async function validateLaunchDescriptor(
     throw new AppError('SECURITY', '启动工作目录通过符号链接逃逸出 App 目录，已拒绝启动');
   }
 
-  const info = await lstatImpl(realEntry).catch(() => null);
+  const info = await lstatImpl(entryPath).catch(() => null);
   if (!info) throw new AppError('NOT_FOUND', '启动入口文件不存在，请重新安装');
   if (!info.isFile()) throw new AppError('VALIDATION', '启动入口不是普通文件，已拒绝启动');
 
@@ -121,14 +121,17 @@ export async function validateLaunchDescriptor(
     const mode = info.mode & 0o777;
     if ((mode & 0o111) === 0) {
       try {
-        await (deps.chmodImpl ?? chmod)(realEntry, mode | 0o111);
+        await (deps.chmodImpl ?? chmod)(entryPath, mode | 0o111);
       } catch (err) {
         throw new AppError('IO', `无法设置启动入口的可执行权限：${errorMessage(err)}`);
       }
     }
   }
 
-  return { appRoot: realRoot, versionDir, entryPath: realEntry, cwd: realCwd, args: [] };
+  // 返回构造出的原始路径（realpath 仅用于逃逸校验）：
+  // Windows 上 realpath 可能返回 8.3 短路径（C:\Users\RUNNER~1\...），
+  // 直接返回会让启动命令/日志路径不稳定，也会破坏路径断言。
+  return { appRoot, versionDir, entryPath, cwd, args: [] };
 }
 
 /** 构造 spawn 参数（单独抽出便于单测 Windows 脚本分支）。 */
