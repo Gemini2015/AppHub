@@ -701,10 +701,13 @@ export class LibraryServiceImpl implements LibraryService {
     ) {
       throw new AppError('SECURITY', '启动入口越出版本目录');
     }
+    // 注意：返回构造出的原始路径（而不是 fs.realpath 结果）。realpath 只用于
+    // 符号链接逃逸校验；在 Windows 上 realpath 可能返回 8.3 短路径
+    // （如 C:\Users\RUNNER~1\...），直接返回会让安装路径/日志不稳定。
     return {
       appRoot,
       versionDir,
-      entryPath: realEntryPath,
+      entryPath,
       cwd: versionDir,
       args: [],
     };
