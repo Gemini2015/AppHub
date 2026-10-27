@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AppRefRequestSchema,
+  ChangeDataDirRequestSchema,
   ChannelIdRequestSchema,
   CreateChannelRequestSchema,
   EmptySchema,
@@ -191,5 +192,26 @@ describe('ipc-schemas：本机 Host 配置', () => {
       HostUpdateConfigRequestSchema.safeParse({ channelId: validChannelId, patch: { unknown: 1 } }).success,
     ).toBe(false);
     expect(HostUpdateConfigRequestSchema.safeParse({ channelId: 'bad', patch: {} }).success).toBe(false);
+  });
+});
+
+describe('ipc-schemas：修改数据目录', () => {
+  it('接受绝对路径（Windows/POSIX 形式）', () => {
+    expect(ChangeDataDirRequestSchema.safeParse({ path: 'D:\\AppHubData' }).success).toBe(true);
+    expect(ChangeDataDirRequestSchema.safeParse({ path: '/home/user/AppHubData' }).success).toBe(true);
+    expect(ChangeDataDirRequestSchema.safeParse({ path: '  /home/user/data  ' }).success).toBe(true);
+  });
+
+  it('拒绝空/空白/非字符串/缺字段/多余字段', () => {
+    expect(ChangeDataDirRequestSchema.safeParse({}).success).toBe(false);
+    expect(ChangeDataDirRequestSchema.safeParse({ path: '' }).success).toBe(false);
+    expect(ChangeDataDirRequestSchema.safeParse({ path: '   ' }).success).toBe(false);
+    expect(ChangeDataDirRequestSchema.safeParse({ path: 123 }).success).toBe(false);
+    expect(ChangeDataDirRequestSchema.safeParse({ path: null }).success).toBe(false);
+    expect(ChangeDataDirRequestSchema.safeParse({ path: '/home/x', extra: 1 }).success).toBe(false);
+  });
+
+  it('拒绝超长路径（>4096）', () => {
+    expect(ChangeDataDirRequestSchema.safeParse({ path: `/${'a'.repeat(4096)}` }).success).toBe(false);
   });
 });

@@ -11,6 +11,7 @@ import type {
   ChannelDetailDTO,
   ChannelSummaryDTO,
   CreateChannelRequestDTO,
+  SystemInfoDTO,
 } from '../../../shared/ipc';
 
 export type {
@@ -20,6 +21,8 @@ export type {
   AppDetailDTO,
   AppHubApi,
   AppSummaryDTO,
+  ChangeDataDirRequestDTO,
+  ChangeDataDirResultDTO,
   ChannelDetailDTO,
   ChannelIdRequestDTO,
   ChannelSummaryDTO,
@@ -79,3 +82,5 @@ export type AppVersionEntry = AppDetailDTO['versions'][number];
 export type FileEntryDTO = AppVersionEntry['files'][number];
 /** 发布/安装进度阶段。 */
 export type ProgressPhase = import('../../../shared/ipc').ProgressEventDTO['phase'];
+/** 数据目录来源：default（默认）/ custom（自定义）/ env（环境变量固定）。 */
+export type DataDirSource = SystemInfoDTO['dataDirSource'];

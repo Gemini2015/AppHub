@@ -27,6 +27,7 @@ import {
   type AppSummaryDTO,
   type ChannelDetailDTO,
   type ChannelSummaryDTO,
+  type ChangeDataDirResultDTO,
   type DataChangedEventDTO,
   type ExportPrivateConfigResultDTO,
   type HostStatusDTO,
@@ -49,6 +50,7 @@ import {
 } from '../../shared/ipc';
 import {
   AppRefRequestSchema,
+  ChangeDataDirRequestSchema,
   ChannelIdRequestSchema,
   CreateChannelRequestSchema,
   EmptySchema,
@@ -123,6 +125,21 @@ export interface IpcRouterContext {
   launch?: (core: AppHubCore, channelId: string, appId: string) => Promise<LaunchResultDTO>;
   /** 测试注入：在文件管理器中定位安装目录。 */
   reveal?: (core: AppHubCore, channelId: string, appId: string) => Promise<void>;
+  /**
+   * 当前数据目录信息（由 index.ts 按 bootstrap/env 注入）。
+   * 缺省回退到 coreManager.dataDir，视为不可编辑的默认目录（便于测试与降级）。
+   */
+  dataDirInfo?: {
+    dataDir: string;
+    defaultDataDir: string;
+    source: 'default' | 'custom' | 'env';
+    editable: boolean;
+  };
+  /**
+   * 修改数据目录：校验目标 → 关闭 core → 迁移 → 写引导配置 → 重启 App。
+   * 缺省（如 env 固定或测试未注入）时 handler 返回 UNSUPPORTED。
+   */
+  changeDataDir?: (newPath: string) => Promise<ChangeDataDirResultDTO>;
 }
 
 const MAX_PRIVATE_CONFIG_BYTES = 2 * 1024 * 1024;
@@ -508,11 +525,21 @@ export function createIpcRouter(ctx: IpcRouterContext): Record<string, IpcHandle
     [IPC_CHANNELS.systemInfo]: handle(IPC_CHANNELS.systemInfo, EmptySchema, async () => {
       const versions = (ctx.appVersions ?? defaultAppVersions)();
       const counts = await readSystemCounts();
+      const dataDirInfo =
+        ctx.dataDirInfo ?? {
+          dataDir: ctx.coreManager.dataDir,
+          defaultDataDir: ctx.coreManager.dataDir,
+          source: 'default' as const,
+          editable: false,
+        };
       const info: SystemInfoDTO = {
         ...versions,
         platform: ctx.platform ?? process.platform,
         arch: process.arch,
-        dataDir: path.resolve(ctx.coreManager.dataDir),
+        dataDir: path.resolve(dataDirInfo.dataDir),
+        dataDirSource: dataDirInfo.source,
+        dataDirEditable: dataDirInfo.editable,
+        defaultDataDir: path.resolve(dataDirInfo.defaultDataDir),
         ...counts,
       };
       return info;
@@ -533,6 +560,18 @@ export function createIpcRouter(ctx: IpcRouterContext): Record<string, IpcHandle
       if (result.canceled) return null;
       return result.filePaths?.[0] ?? null;
     }),
+
+    [IPC_CHANNELS.systemChangeDataDir]: handle(
+      IPC_CHANNELS.systemChangeDataDir,
+      ChangeDataDirRequestSchema.strict(),
+      async (payload) => {
+        if (!ctx.changeDataDir) {
+          throw new AppError('UNSUPPORTED', '当前启动方式不支持在设置中修改数据目录');
+        }
+        // 成功后 App 会重启，因此不广播 data-changed
+        return ctx.changeDataDir(payload.path);
+      },
+    ),
 
     // -----------------------------------------------------------------------
     // channels

@@ -1,8 +1,17 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, dialog } from 'electron';
 import type { Event as ElectronEvent } from 'electron';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { AppError } from '@apphub/protocol';
 import { CoreManager } from './core-manager';
+import {
+  handleStartupDataDirFailure,
+  migrateAppHubData,
+  resolveAppDataDir,
+  validateTargetDataDir,
+  writeDataDirConfig,
+} from './data-dir';
+import type { DataDirInfo } from './data-dir';
 import { registerIpcHandlers } from './ipc';
 import type { IpcSenderLike } from './ipc';
 import { createLogger } from './logger';
@@ -12,18 +21,20 @@ import { SelectionRegistry } from './selection-registry';
 import { createSenderPolicy } from './sender';
 import type { SenderPolicy } from './sender';
 import { createMainWindow } from './window';
+import type { ChangeDataDirResultDTO } from '../../shared/ipc';
 
 /**
  * Electron 主进程入口。
  *
  * 职责（docs/ARCHITECTURE.md §5.3）：
  *  - app 生命周期、单实例锁、userData 覆盖（APPHUB_USER_DATA_DIR，必须在 ready 前 setPath）；
+ *  - 数据目录解析（env > apphub-bootstrap.json > Electron userData）与运行时切换（迁移+重启）；
  *  - 装配 core（CoreManager）/ safeStorage 加密 / selection registry / IPC；
  *  - 创建安全窗口（Security 基线见 window.ts）；
  *  - 退出时优雅关闭 core、记录日志。
  *
  * 环境变量：
- *  - APPHUB_USER_DATA_DIR：覆盖 Electron userData（测试/多实例隔离）；
+ *  - APPHUB_USER_DATA_DIR：覆盖 Electron userData（测试/多实例隔离；同时意味着数据目录只读不可切换）；
  *  - APPHUB_DEV_SERVER_URL：开发模式加载 Vite dev server（由 scripts/dev.mjs 设置）。
  */
 
@@ -110,9 +121,10 @@ if (!gotSingleInstanceLock) {
 }
 
 async function bootstrap(): Promise<void> {
-  const userData = app.getPath('userData');
+  // Electron 当前 userData（env 覆盖时它已经是 env 目录）：引导配置与日志都放这里。
+  const electronUserData = app.getPath('userData');
   logger = createLogger({
-    logDir: path.join(userData, 'logs'),
+    logDir: path.join(electronUserData, 'logs'),
     console: DEV_SERVER_URL !== undefined || !app.isPackaged,
   });
   logger.info('AppHub 启动', {
@@ -121,15 +133,35 @@ async function bootstrap(): Promise<void> {
     platform: process.platform,
     arch: process.arch,
     dev: DEV_SERVER_URL !== undefined,
-    userData,
+    userData: electronUserData,
   });
   if (USER_DATA_OVERRIDE) {
-    logger.info('已通过 APPHUB_USER_DATA_DIR 覆盖数据目录', { userData });
+    logger.info('已通过 APPHUB_USER_DATA_DIR 覆盖数据目录（设置中不可修改）', { userData: electronUserData });
   }
 
+  // 数据目录：env > apphub-bootstrap.json > Electron userData
+  const resolvedDataDir = resolveAppDataDir({
+    electronUserDataDir: electronUserData,
+    env: process.env,
+    logger,
+  });
+  logger.info('数据目录已解析', {
+    dataDir: resolvedDataDir.dataDir,
+    source: resolvedDataDir.source,
+    defaultDataDir: resolvedDataDir.defaultDataDir,
+    editable: resolvedDataDir.editable,
+  });
+
   const secretBox = createSecretBox({ logger });
-  coreManager = new CoreManager({ dataDir: userData, logger, secretBox });
-  await coreManager.prepare();
+  coreManager = new CoreManager({ dataDir: resolvedDataDir.dataDir, logger, secretBox });
+  try {
+    await coreManager.prepare();
+  } catch (err) {
+    // 自定义数据目录在启动期不可用（移动盘拔出/权限变化/目录被删除）时，
+    // 不能让用户永远进不了 UI：弹窗提供“恢复默认并重启 / 退出”。
+    handleStartupPrepareFailure(electronUserData, resolvedDataDir, err);
+    return;
+  }
 
   selectionRegistry = new SelectionRegistry({ logger });
 
@@ -144,12 +176,30 @@ async function bootstrap(): Promise<void> {
       .filter((window) => !window.isDestroyed())
       .map((window) => window.webContents as unknown as IpcSenderLike);
 
+  const dataDirInfo: DataDirInfo = {
+    dataDir: resolvedDataDir.dataDir,
+    defaultDataDir: resolvedDataDir.defaultDataDir,
+    source: resolvedDataDir.source,
+    editable: resolvedDataDir.editable,
+  };
+
   disposeIpc = registerIpcHandlers({
     ctx: {
       logger,
       coreManager,
       selectionRegistry,
       senderPolicy,
+      dataDirInfo,
+      changeDataDir: (newPath) =>
+        changeAppDataDir(
+          {
+            electronUserDataDir: electronUserData,
+            currentDataDir: resolvedDataDir.dataDir,
+            defaultDataDir: resolvedDataDir.defaultDataDir,
+            editable: resolvedDataDir.editable,
+          },
+          newPath,
+        ),
       isTrustedSender: (sender) =>
         mainWindow !== null && !mainWindow.isDestroyed() && sender.id === mainWindow.webContents.id,
       getWebContents,
@@ -158,7 +208,160 @@ async function bootstrap(): Promise<void> {
 
   booted = true;
   openMainWindow(preloadFile, rendererIndexFile);
-  logger.info('主进程初始化完成', { devServerUrl: DEV_SERVER_URL ?? '(file://)', rendererIndexFile });
+  logger.info('主进程初始化完成', {
+    devServerUrl: DEV_SERVER_URL ?? '(file://)',
+    rendererIndexFile,
+    dataDir: resolvedDataDir.dataDir,
+  });
+}
+
+/**
+ * 启动期数据目录准备失败：
+ *  - source==='custom'：弹窗让用户选择“恢复默认数据目录并重启 / 退出”（避免永久无法进入 UI）；
+ *  - source==='default'/'env'：维持原错误路径，直接退出（由环境变量/磁盘自行修复）。
+ */
+function handleStartupPrepareFailure(
+  electronUserDataDir: string,
+  resolved: DataDirInfo,
+  error: unknown,
+): void {
+  try {
+    handleStartupDataDirFailure({
+      source: resolved.source,
+      dataDir: resolved.dataDir,
+      electronUserDataDir,
+      error,
+      logger: logger ?? undefined,
+      handlers: {
+        showRecoveryDialog: (message, detail) =>
+          dialog.showMessageBoxSync({
+            type: 'error',
+            title: 'AppHub 数据目录不可用',
+            message,
+            detail,
+            buttons: ['恢复默认数据目录并重启', '退出'],
+            defaultId: 1,
+            cancelId: 1,
+          }),
+        writeDefaultConfig: (userDataDir) => writeDataDirConfig(userDataDir, null),
+        relaunch: () => app.relaunch(),
+        exit: (code) => flushLoggerThenExit(code),
+      },
+    });
+  } catch (err) {
+    logger?.error('处理启动期数据目录失败时发生异常', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    flushLoggerThenExit(1);
+  }
+}
+
+/**
+ * 先尽力把日志落盘再退出：showMessageBoxSync 会阻塞事件循环，直接 app.exit 可能丢失
+ * 启动失败诊断日志（打包后没有控制台输出）。最多等待 800ms，避免日志写入异常卡住退出。
+ */
+function flushLoggerThenExit(code: number): void {
+  const current = logger;
+  if (!current) {
+    app.exit(code);
+    return;
+  }
+  let finished = false;
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+    app.exit(code);
+  };
+  const timer = setTimeout(finish, 800);
+  void current
+    .flush()
+    .catch(() => undefined)
+    .finally(() => {
+      clearTimeout(timer);
+      finish();
+    });
+}
+
+interface ChangeAppDataDirContext {
+  electronUserDataDir: string;
+  currentDataDir: string;
+  defaultDataDir: string;
+  editable: boolean;
+}
+
+let dataDirChangeInProgress = false;
+
+/** 延迟重启：先让 IPC 响应返回，再重启进程（relaunch 在退出后启动新实例，避免单实例锁竞争）。 */
+function scheduleRelaunch(): void {
+  setTimeout(() => {
+    try {
+      app.relaunch();
+    } catch (err) {
+      logger?.error('重启 App 失败', { message: err instanceof Error ? err.message : String(err) });
+    }
+    app.exit(0);
+  }, 150);
+}
+
+/**
+ * 修改数据目录：校验目标 → 关闭 core（停止本机 Host）→ 迁移 AppHub 数据 → 写引导配置 → 重启。
+ * 迁移失败时也会重启（此时引导配置未变更），避免 App 停留在 core 已关闭的不可用状态。
+ */
+async function changeAppDataDir(
+  context: ChangeAppDataDirContext,
+  newPath: string,
+): Promise<ChangeDataDirResultDTO> {
+  if (!context.editable) {
+    throw new AppError(
+      'UNSUPPORTED',
+      '数据目录由 APPHUB_USER_DATA_DIR 环境变量固定，无法在设置中修改；请移除该环境变量后重启 App',
+    );
+  }
+  if (dataDirChangeInProgress) {
+    throw new AppError('CONFLICT', '数据目录正在变更中，请稍候');
+  }
+
+  // 先校验（失败时不动 core，用户可继续使用）
+  const target = await validateTargetDataDir({
+    currentDataDir: context.currentDataDir,
+    targetPath: newPath,
+    defaultDataDir: context.defaultDataDir,
+  });
+  dataDirChangeInProgress = true;
+
+  const manager = coreManager;
+  try {
+    if (!manager) throw new AppError('STATE', '核心服务尚未初始化，无法修改数据目录');
+    // 关闭 core：停止本机 Host、释放已打开的文件/句柄
+    await manager.close();
+    const copied = await migrateAppHubData(context.currentDataDir, target.targetDataDir, { logger: logger ?? undefined });
+    if (target.isDefault) {
+      writeDataDirConfig(context.electronUserDataDir, null);
+    } else {
+      writeDataDirConfig(context.electronUserDataDir, target.targetDataDir);
+    }
+    logger?.info('数据目录已切换，准备重启 App', {
+      from: context.currentDataDir,
+      to: target.targetDataDir,
+      source: target.isDefault ? 'default' : 'custom',
+      copied,
+    });
+    scheduleRelaunch();
+    return {
+      previousDataDir: context.currentDataDir,
+      newDataDir: target.targetDataDir,
+      restarting: true,
+    };
+  } catch (err) {
+    const appError = AppError.from(err, 'IO');
+    logger?.error('修改数据目录失败，将重启 App 恢复原数据目录', {
+      code: appError.code,
+      message: appError.message,
+    });
+    // 引导配置尚未（成功）修改，重启后会回到原数据目录，避免核心服务处于已关闭状态。
+    scheduleRelaunch();
+    throw appError;
+  }
 }
 
 function openMainWindow(

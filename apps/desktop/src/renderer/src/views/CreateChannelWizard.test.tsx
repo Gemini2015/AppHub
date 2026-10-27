@@ -28,9 +28,14 @@ describe('创建频道向导', () => {
     await user.type(screen.getByTestId('create-channel-name'), '测试频道');
     await user.click(screen.getByTestId('create-channel-next'));
 
-    // 默认 ftp-http
+    // 默认 local-host（本机 Host）
     expect(await screen.findByTestId('storage-provider-select')).toBeInTheDocument();
+    expect(screen.getByTestId('local-host-root-dir')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/FTP 主机/)).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByTestId('storage-provider-select'), 'ftp-http');
     expect(screen.getByLabelText(/FTP 主机/)).toBeInTheDocument();
+    expect(screen.queryByTestId('local-host-root-dir')).not.toBeInTheDocument();
 
     await user.selectOptions(screen.getByTestId('storage-provider-select'), 'local');
     expect(screen.getByLabelText(/本地根目录/)).toBeInTheDocument();
@@ -40,6 +45,18 @@ describe('创建频道向导', () => {
     expect(screen.getByLabelText(/Bucket/)).toBeInTheDocument();
     expect(screen.getByLabelText(/Access Key/)).toBeInTheDocument();
     expect(screen.queryByLabelText(/本地根目录/)).not.toBeInTheDocument();
+  });
+
+  it('默认存储类型为 local-host（本机 Host）', async () => {
+    const api = createMockApi();
+    renderWithApi(<CreateChannelWizard onClose={vi.fn()} onCreated={vi.fn()} />, api);
+    const user = userEvent.setup();
+
+    await user.type(screen.getByTestId('create-channel-name'), '测试频道');
+    await user.click(screen.getByTestId('create-channel-next'));
+
+    expect(await screen.findByTestId('storage-provider-select')).toHaveValue('local-host');
+    expect(screen.getByTestId('local-host-port')).toBeInTheDocument();
   });
 
   it('选择私密可见性时展示能力链接说明', async () => {

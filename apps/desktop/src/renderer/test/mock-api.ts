@@ -34,6 +34,7 @@ export const META_URL = 'foobar/app.meta.json';
 export const HOST_LAN_URL = 'http://192.168.1.10:8787/channel.json';
 export const HOST_LOCAL_URL = 'http://127.0.0.1:8787/channel.json';
 export const PICKED_DIR = 'D:/AppHub/channel-repo';
+export const NEW_DATA_DIR = 'D:/AppHub-data';
 
 type Platform = AppSummaryDTO['platforms'][number];
 
@@ -203,6 +204,9 @@ export function makeSystemInfo(overrides: Partial<SystemInfoDTO> = {}): SystemIn
     platform: 'win32',
     arch: 'x64',
     dataDir: 'C:/Users/test/AppData/Roaming/AppHub',
+    dataDirSource: 'default',
+    dataDirEditable: true,
+    defaultDataDir: 'C:/Users/test/AppData/Roaming/AppHub',
     channelCount: 1,
     installedCount: 1,
     ...overrides,
@@ -328,6 +332,13 @@ export function createMockApi(options: MockApiOptions = {}): MockAppHubApi {
       info: vi.fn(async () => ok(makeSystemInfo())),
       openDataDir: vi.fn(async () => ok(undefined)),
       pickDirectory: vi.fn(async () => ok(PICKED_DIR)),
+      changeDataDir: vi.fn(async (input: { path: string }) =>
+        ok({
+          previousDataDir: 'C:/Users/test/AppData/Roaming/AppHub',
+          newDataDir: input.path,
+          restarting: true,
+        }),
+      ),
     },
     channels: {
       list: vi.fn(async () => ok([makeChannelSummary()])),

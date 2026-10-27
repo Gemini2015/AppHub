@@ -38,7 +38,15 @@ test.describe('创建频道向导', () => {
     await nextButton.click();
     await expect(providerSelect).toBeVisible({ timeout: TIMEOUTS.op });
 
-    // 4) provider 切换：字段联动（value 与 UI 同步）
+    // 4) Phase 6：默认存储类型 = 本机 Host（local-host），默认对局域网开放（0.0.0.0），
+    //    无已用端口时端口默认 8787（端口自动避让见 create-channel-port.spec.ts）
+    await expect(providerSelect).toHaveValue('local-host');
+    const localHostPort = window.getByTestId(TESTID.localHostPort);
+    await expect(localHostPort).toBeVisible();
+    await expect(window.getByTestId(TESTID.localHostBindHost)).toHaveValue('0.0.0.0');
+    await expect(localHostPort).toHaveValue('8787');
+
+    // 5) provider 切换：字段联动（value 与 UI 同步）
     await providerSelect.selectOption('ftp-http');
     await expect(providerSelect).toHaveValue('ftp-http');
     await providerSelect.selectOption('s3');

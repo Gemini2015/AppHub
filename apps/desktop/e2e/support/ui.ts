@@ -73,6 +73,12 @@ export const TESTID = {
   publishNext: 'publish-next',
   publishSubmit: 'publish-submit',
 
+  // 设置页：数据目录（Phase 6）
+  dataDirSource: 'data-dir-source',
+  dataDirDefaultHint: 'data-dir-default-hint',
+  changeDataDirButton: 'change-data-dir-button',
+  dataDirChangeError: 'data-dir-change-error',
+
   dialogError: 'dialog-error',
   confirmOk: 'confirm-ok',
   uninstallConfirmOk: 'uninstall-confirm-ok',

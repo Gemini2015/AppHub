@@ -1,14 +1,12 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { Page } from '@playwright/test';
-import type {
-  ApiResult,
-  AppHubApi,
-  ChannelDetailDTO,
-  ChannelSummaryDTO,
-  CreateChannelRequestDTO,
-  HostStatusDTO,
-} from '../shared/ipc';
+import {
+  createChannelViaApi,
+  findChannelIdByName,
+  hostStart,
+  hostStatus,
+  hostStop,
+} from './support/app-api';
 import { TMP_DIR } from './support/paths';
 import { getFreePort } from './support/port';
 import { expect, test } from './support/test-fixtures';
@@ -34,84 +32,6 @@ import { TESTID, TIMEOUTS, waitForShell } from './support/ui';
 async function createTempRepoDir(label: string): Promise<string> {
   await fs.mkdir(TMP_DIR, { recursive: true });
   return fs.mkdtemp(path.join(TMP_DIR, `local-host-${label}-`));
-}
-
-function readApi(window: Page): AppHubApi {
-  const api = (window as unknown as { apphub?: AppHubApi }).apphub;
-  if (!api) throw new Error('window.apphub 缺失：preload 未注入');
-  return api;
-}
-
-/** 在 renderer 上下文里执行 IPC 调用（回调内只引用浏览器全局 window，不捕获 Node 侧变量）。 */
-async function createChannelViaApi(
-  window: Page,
-  request: CreateChannelRequestDTO,
-): Promise<ChannelDetailDTO> {
-  const result = await window.evaluate(
-    async (input: CreateChannelRequestDTO): Promise<ApiResult<ChannelDetailDTO>> => {
-      const api = (window as unknown as { apphub?: AppHubApi }).apphub;
-      if (!api) throw new Error('window.apphub 缺失：preload 未注入');
-      return api.channels.create(input);
-    },
-    request,
-  );
-  expect(result.ok, `通过 IPC 创建频道失败：${JSON.stringify(result)}`).toBe(true);
-  if (!result.ok) throw new Error(`创建频道失败：${result.error.code} ${result.error.message}`);
-  return result.value;
-}
-
-async function hostStatus(window: Page, channelId: string): Promise<HostStatusDTO> {
-  const result = await window.evaluate(
-    async (id: string): Promise<ApiResult<HostStatusDTO>> => {
-      const api = (window as unknown as { apphub?: AppHubApi }).apphub;
-      if (!api) throw new Error('window.apphub 缺失：preload 未注入');
-      return api.host.status(id);
-    },
-    channelId,
-  );
-  expect(result.ok, `读取 Host 状态失败：${JSON.stringify(result)}`).toBe(true);
-  if (!result.ok) throw new Error(`host.status 失败：${result.error.code} ${result.error.message}`);
-  return result.value;
-}
-
-async function hostStart(window: Page, channelId: string): Promise<HostStatusDTO> {
-  const result = await window.evaluate(
-    async (id: string): Promise<ApiResult<HostStatusDTO>> => {
-      const api = (window as unknown as { apphub?: AppHubApi }).apphub;
-      if (!api) throw new Error('window.apphub 缺失：preload 未注入');
-      return api.host.start(id);
-    },
-    channelId,
-  );
-  expect(result.ok, `启动 Host 失败：${JSON.stringify(result)}`).toBe(true);
-  if (!result.ok) throw new Error(`host.start 失败：${result.error.code} ${result.error.message}`);
-  return result.value;
-}
-
-async function hostStop(window: Page, channelId: string): Promise<void> {
-  await window.evaluate(
-    async (id: string): Promise<ApiResult<HostStatusDTO>> => {
-      const api = (window as unknown as { apphub?: AppHubApi }).apphub;
-      if (!api) throw new Error('window.apphub 缺失：preload 未注入');
-      return api.host.stop(id);
-    },
-    channelId,
-  );
-}
-
-async function findChannelIdByName(window: Page, name: string): Promise<string> {
-  const list = await window.evaluate(
-    async (): Promise<ApiResult<ChannelSummaryDTO[]>> => {
-      const api = (window as unknown as { apphub?: AppHubApi }).apphub;
-      if (!api) throw new Error('window.apphub 缺失：preload 未注入');
-      return api.channels.list();
-    },
-  );
-  expect(list.ok, `读取频道列表失败：${JSON.stringify(list)}`).toBe(true);
-  if (!list.ok) throw new Error(`channels.list 失败：${list.error.code} ${list.error.message}`);
-  const found = list.value.find((channel) => channel.name === name);
-  expect(found, `频道列表中没有找到名称为「${name}」的频道`).toBeDefined();
-  return found!.id;
 }
 
 /** 测试进程（Node 侧）真实 HTTP 请求；连接失败返回 'error'。 */

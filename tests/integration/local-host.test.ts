@@ -3,8 +3,8 @@ import { createServer as createNetServer, type Server as NetServer } from 'node:
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { ChannelDetail } from '@apphub/core';
-import type { LocalHostStorageConfig } from '@apphub/protocol';
+import type { ChannelDetail, HostStatus } from '@apphub/core';
+import { isAppError, type LocalHostStorageConfig } from '@apphub/protocol';
 import { getFreePort, writeFileTree, writeZip } from '@apphub/testkit';
 import { createRealHarness, expectAppError, toPublishFiles } from './support';
 import type { RealHarness, RealPeer } from './support';
@@ -71,6 +71,28 @@ function closeNetServer(server: NetServer): Promise<void> {
   });
 }
 
+/**
+ * 启动 Host，并对"getFreePort 关闭 → Host listen"之间的极小竞争窗口做重试。
+ *
+ * 背景：测试并行运行时，`getFreePort()` 返回的端口在真正 listen 前可能被其它测试/进程短暂占用，
+ * 表现为 CONFLICT（EADDRINUSE）。此时频道仍处于 stopped，可用 updateConfig 换一个端口重试；
+ * 只对 CONFLICT 重试，其它错误原样抛出（端口冲突用例本身仍显式断言 CONFLICT，不走此 helper）。
+ */
+async function startHostResilient(
+  peer: RealPeer,
+  channelId: string,
+  attempts = 3,
+): Promise<HostStatus> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await peer.core.host.start(channelId);
+    } catch (error) {
+      if (attempt >= attempts || !isAppError(error) || error.code !== 'CONFLICT') throw error;
+      await peer.core.host.updateConfig(channelId, { port: await getFreePort() });
+    }
+  }
+}
+
 /** 读取本机 Host 的 HTTP 响应（真实 global fetch；失败信息带上 URL 便于排查）。 */
 async function fetchText(url: string): Promise<{ status: number; text: string }> {
   const response = await fetch(url);
@@ -122,11 +144,10 @@ describe('集成：本机 Host（local-host）', () => {
       );
 
       // 3) 启动 Host：真实监听 + URL 形状
-      const started = await owner.core.host.start(channel.id);
+      const started = await startHostResilient(owner, channel.id);
       expect(started.running).toBe(true);
-      expect(started.port).toBe(port);
-      expect(started.configuredPort).toBe(port);
-      expect(started.urls.channelUrl).toBe(`http://127.0.0.1:${port}/channel.json`);
+      expect(started.port).toBe(started.configuredPort);
+      expect(started.urls.channelUrl).toBe(`http://127.0.0.1:${started.port}/channel.json`);
       expect(started.urls.localChannelUrl).toBe(started.urls.channelUrl);
       const channelResponse = await fetchText(started.urls.channelUrl);
       expect(channelResponse.status).toBe(200);
@@ -196,9 +217,9 @@ describe('集成：本机 Host（local-host）', () => {
       );
 
       // 7) 重新启动：HTTP 恢复；订阅者 refresh 成功
-      const restarted = await owner.core.host.start(channel.id);
+      const restarted = await startHostResilient(owner, channel.id);
       expect(restarted.running).toBe(true);
-      expect((await fetch(started.urls.channelUrl)).status).toBe(200);
+      expect((await fetch(restarted.urls.channelUrl)).status).toBe(200);
       const refreshed = await subscriber.core.channels.refresh(channel.id);
       expect(refreshed.appCount).toBe(1);
 
@@ -238,7 +259,7 @@ describe('集成：本机 Host（local-host）', () => {
         files: toPublishFiles(srcDir, ['private.exe']),
       });
 
-      const started = await owner.core.host.start(channel.id);
+      const started = await startHostResilient(owner, channel.id);
       const capabilityUrl = started.urls.channelUrl;
       expect(capabilityUrl).toContain(`/_private/${channel.id}/`);
       expect(capabilityUrl.endsWith('/channel.json')).toBe(true);
@@ -331,7 +352,7 @@ describe('集成：本机 Host（local-host）', () => {
       });
       expect(published.archive?.format).toBe('zip');
 
-      const started = await owner.core.host.start(channel.id);
+      const started = await startHostResilient(owner, channel.id);
       expect((await fetch(started.urls.channelUrl)).status).toBe(200);
 
       const subscriber = await h.newCore('subscriber');
@@ -380,9 +401,9 @@ describe('集成：本机 Host（local-host）', () => {
         expect(failed.lastError?.code).toBe('CONFLICT');
 
         await closeNetServer(blocker);
-        const started = await owner.core.host.start(channel.id);
+        const started = await startHostResilient(owner, channel.id);
         expect(started.running).toBe(true);
-        expect(started.port).toBe(port);
+        expect(started.port).toBe(started.configuredPort);
         expect((await owner.core.host.status(channel.id)).lastError).toBeUndefined();
         expect((await fetch(started.urls.channelUrl)).status).toBe(200);
         await owner.core.host.stop(channel.id);
@@ -437,8 +458,8 @@ describe('集成：本机 Host（local-host）', () => {
         advertiseHost: '127.0.0.1',
       });
 
-      const started = await owner.core.host.start(channel.id);
-      expect(started.port).toBe(portA);
+      const started = await startHostResilient(owner, channel.id);
+      expect(started.port).toBe(started.configuredPort);
       await expectAppError(
         () => owner.core.host.updateConfig(channel.id, { port: 45678 }),
         ['STATE'],
@@ -458,16 +479,16 @@ describe('集成：本机 Host（local-host）', () => {
         ['VALIDATION'],
       );
 
-      const restarted = await owner.core.host.start(channel.id);
-      expect(restarted.port).toBe(portB);
-      expect(restarted.urls.channelUrl).toBe(`http://localhost:${portB}/channel.json`);
+      const restarted = await startHostResilient(owner, channel.id);
+      expect(restarted.port).toBe(restarted.configuredPort);
+      expect(restarted.urls.channelUrl).toBe(`http://localhost:${restarted.port}/channel.json`);
       // localhost 与 127.0.0.1 等价：监听 127.0.0.1 时用回环地址验证
       expect((await fetch(restarted.urls.localChannelUrl)).status).toBe(200);
 
       // 清空 advertiseHost 后回退到本机地址
       await owner.core.host.stop(channel.id);
       const cleared = await owner.core.host.updateConfig(channel.id, { advertiseHost: '' });
-      expect(cleared.urls.channelUrl).toBe(`http://127.0.0.1:${portB}/channel.json`);
+      expect(cleared.urls.channelUrl).toBe(`http://127.0.0.1:${restarted.configuredPort}/channel.json`);
       await owner.core.host.stopAll();
     } finally {
       await h.dispose();

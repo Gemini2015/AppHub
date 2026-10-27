@@ -28,6 +28,13 @@ const HeadersSchema = z.record(z.string().max(1024)).optional();
 
 export const EmptySchema = z.undefined().or(z.object({}).strict()).optional();
 
+/** 修改 AppHub 数据目录（绝对路径由主进程再校验/规范化）。 */
+export const ChangeDataDirRequestSchema = z
+  .object({
+    path: z.string().trim().min(1).max(4096),
+  })
+  .strict();
+
 export const ChannelIdRequestSchema = z.object({ channelId: ChannelIdSchema }).strict();
 
 export const CreateChannelRequestSchema = z

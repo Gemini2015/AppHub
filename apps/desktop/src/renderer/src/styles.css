@@ -2159,6 +2159,22 @@ a {
   margin-top: 22px;
 }
 
+/* 数据目录迁移确认框中的说明列表 */
+.migration-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.migration-list li::marker {
+  color: var(--warn);
+}
+
 /* =========================================================================
    设置 / 关于
    ========================================================================= */

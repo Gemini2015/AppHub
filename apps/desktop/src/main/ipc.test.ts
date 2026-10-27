@@ -271,6 +271,8 @@ function makeHarness(options: {
   registryDialog?: any;
   launch?: any;
   reveal?: any;
+  dataDirInfo?: IpcRouterContext['dataDirInfo'];
+  changeDataDir?: (newPath: string) => Promise<{ previousDataDir: string; newDataDir: string; restarting: boolean }>;
 } = {}): Harness {
   const logger = createFakeLogger();
   const core = options.core ?? makeCore();
@@ -318,6 +320,8 @@ function makeHarness(options: {
     randomId: () => 'op-test-1',
     launch: options.launch,
     reveal: options.reveal,
+    dataDirInfo: options.dataDirInfo,
+    changeDataDir: options.changeDataDir,
   };
   const router = createIpcRouter(ctx) as Harness['router'];
   const event: IpcEventLike = { sender, senderFrame: { url: options.frameUrl ?? TRUSTED_URL } };
@@ -431,7 +435,7 @@ describe('ipc：zod 入参校验', () => {
 // ---------------------------------------------------------------------------
 
 describe('ipc：ApiResult 与 system.info', () => {
-  it('system.info 返回版本/平台/数据目录/计数', async () => {
+  it('system.info 返回版本/平台/数据目录/计数（缺省 dataDir 视为不可编辑默认目录）', async () => {
     const harness = makeHarness();
     const result = await call(harness, IPC_CHANNELS.systemInfo);
     expect(result.ok).toBe(true);
@@ -443,8 +447,56 @@ describe('ipc：ApiResult 与 system.info', () => {
       arch: process.arch,
       channelCount: 1,
       installedCount: 1,
+      dataDirSource: 'default',
+      dataDirEditable: false,
+      defaultDataDir: path.resolve('.tmp-test-data'),
     });
     expect(path.isAbsolute(result.value.dataDir)).toBe(true);
+  });
+
+  it('system.info 反映注入的数据目录信息（default/custom/env 三态）', async () => {
+    const defaultDataDir = path.resolve(tempDir, 'electron-user-data');
+    const customDir = path.resolve(tempDir, 'custom-data');
+
+    const defaultInfo = await call(
+      makeHarness({
+        dataDirInfo: { dataDir: defaultDataDir, defaultDataDir, source: 'default', editable: true },
+      }),
+      IPC_CHANNELS.systemInfo,
+    );
+    expect(defaultInfo.value).toMatchObject({
+      dataDir: defaultDataDir,
+      defaultDataDir,
+      dataDirSource: 'default',
+      dataDirEditable: true,
+    });
+
+    const customInfo = await call(
+      makeHarness({
+        dataDirInfo: { dataDir: customDir, defaultDataDir, source: 'custom', editable: true },
+      }),
+      IPC_CHANNELS.systemInfo,
+    );
+    expect(customInfo.value).toMatchObject({
+      dataDir: customDir,
+      defaultDataDir,
+      dataDirSource: 'custom',
+      dataDirEditable: true,
+    });
+
+    const envDir = path.resolve(tempDir, 'env-data');
+    const envInfo = await call(
+      makeHarness({
+        dataDirInfo: { dataDir: envDir, defaultDataDir: envDir, source: 'env', editable: false },
+      }),
+      IPC_CHANNELS.systemInfo,
+    );
+    expect(envInfo.value).toMatchObject({
+      dataDir: envDir,
+      defaultDataDir: envDir,
+      dataDirSource: 'env',
+      dataDirEditable: false,
+    });
   });
 
   it('core 初始化失败时 system.info 仍可用（计数降级为 0）', async () => {
@@ -853,6 +905,84 @@ describe('ipc：system.openDataDir', () => {
       ok: false,
       error: { code: 'IO' },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// system.changeDataDir
+// ---------------------------------------------------------------------------
+
+describe('ipc：system.changeDataDir', () => {
+  it('调用注入的 changeDataDir 回调并返回迁移结果（不广播 data-changed）', async () => {
+    const changeDataDir = vi.fn(async (newPath: string) => ({
+      previousDataDir: path.resolve(tempDir, 'old-data'),
+      newDataDir: newPath,
+      restarting: true,
+    }));
+    const harness = makeHarness({ changeDataDir });
+    const newPath = path.resolve(tempDir, 'new-data');
+
+    const result = await call(harness, IPC_CHANNELS.systemChangeDataDir, { path: newPath });
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        previousDataDir: path.resolve(tempDir, 'old-data'),
+        newDataDir: newPath,
+        restarting: true,
+      },
+    });
+    expect(changeDataDir).toHaveBeenCalledTimes(1);
+    expect(changeDataDir).toHaveBeenCalledWith(newPath);
+    // App 将重启，不需要广播 data-changed
+    expect(harness.targets[0]?.sent.filter((event) => event.channel === IPC_EVENTS.dataChanged)).toHaveLength(0);
+  });
+
+  it('未注入回调（env 固定/测试未注入）→ UNSUPPORTED', async () => {
+    const harness = makeHarness();
+    const result = await call(harness, IPC_CHANNELS.systemChangeDataDir, { path: path.resolve(tempDir, 'x') });
+    expect(result).toMatchObject({ ok: false, error: { code: 'UNSUPPORTED' } });
+    expect(result.error.message).toContain('不支持');
+  });
+
+  it('非法入参被 zod 拒绝且不调用回调（空/空白/非字符串/多余字段）', async () => {
+    const changeDataDir = vi.fn(async (newPath: string) => ({
+      previousDataDir: 'old',
+      newDataDir: newPath,
+      restarting: true,
+    }));
+    const harness = makeHarness({ changeDataDir });
+    const invalid: unknown[] = [{}, { path: '' }, { path: '   ' }, { path: 123 }, { path: path.resolve(tempDir, 'x'), extra: 1 }];
+    for (const payload of invalid) {
+      const result = await call(harness, IPC_CHANNELS.systemChangeDataDir, payload);
+      expect(result, `应拒绝 ${JSON.stringify(payload)}`).toMatchObject({
+        ok: false,
+        error: { code: 'VALIDATION' },
+      });
+    }
+    expect(changeDataDir).not.toHaveBeenCalled();
+  });
+
+  it('回调抛 AppError 时透传 code/message；普通异常折叠为 INTERNAL', async () => {
+    const conflictHarness = makeHarness({
+      changeDataDir: async () => {
+        throw new AppError('CONFLICT', '目标目录非空，请选择空目录');
+      },
+    });
+    expect(await call(conflictHarness, IPC_CHANNELS.systemChangeDataDir, { path: path.resolve(tempDir, 'x') })).toMatchObject({
+      ok: false,
+      error: { code: 'CONFLICT', message: '目标目录非空，请选择空目录' },
+    });
+
+    const internalHarness = makeHarness({
+      changeDataDir: async () => {
+        throw new Error('boom');
+      },
+    });
+    const internal = await call(internalHarness, IPC_CHANNELS.systemChangeDataDir, {
+      path: path.resolve(tempDir, 'y'),
+    });
+    expect(internal).toMatchObject({ ok: false, error: { code: 'INTERNAL' } });
+    expect(JSON.stringify(internal)).not.toContain('at ');
   });
 });
 

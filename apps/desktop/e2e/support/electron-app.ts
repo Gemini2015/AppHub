@@ -33,6 +33,16 @@ export interface LaunchOptions {
   appDir?: string;
   /** 追加的 Chromium/Electron 参数（例如 Linux CI 上的 --no-sandbox）。 */
   extraArgs?: string[];
+  /**
+   * 用 Chromium 的 `--user-data-dir` 开关指定 userData，而不是设置 APPHUB_USER_DATA_DIR。
+   *
+   * 用途（Phase 6）：E2E 默认用 APPHUB_USER_DATA_DIR 隔离，但该 env 会让
+   * `system.info.dataDirSource='env'`（数据目录只读）。要验证 **default/custom 可编辑分支**
+   * 而仍保持 userData 隔离时，用本开关：`app.getPath('userData')` 会跟随该开关，
+   * 而主进程不会看到 APPHUB_USER_DATA_DIR，于是 source 为 'default'（或预置
+   * `apphub-bootstrap.json` 后的 'custom'）。不触发原生目录对话框/迁移重启。
+   */
+  useUserDataDirArg?: boolean;
 }
 
 export interface RunningApp {
@@ -104,14 +114,24 @@ export async function launchApp(options: LaunchOptions = {}): Promise<RunningApp
     .split(/\s+/)
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
-  const env = buildElectronEnv({
-    APPHUB_USER_DATA_DIR: userDataDir,
-    ...options.extraEnv,
-  });
+  let env: Record<string, string>;
+  let launchArgs: string[];
+  if (options.useUserDataDirArg) {
+    // 非 env 模式：userData 由 --user-data-dir 指定，主进程看不到 APPHUB_USER_DATA_DIR
+    env = buildElectronEnv({ ...options.extraEnv });
+    delete env.APPHUB_USER_DATA_DIR;
+    launchArgs = [appDir, `--user-data-dir=${userDataDir}`, ...envExtraArgs, ...(options.extraArgs ?? [])];
+  } else {
+    env = buildElectronEnv({
+      APPHUB_USER_DATA_DIR: userDataDir,
+      ...options.extraEnv,
+    });
+    launchArgs = [appDir, ...envExtraArgs, ...(options.extraArgs ?? [])];
+  }
 
   const app = await electron.launch({
     executablePath: resolveElectronExecutable(),
-    args: [appDir, ...envExtraArgs, ...(options.extraArgs ?? [])],
+    args: launchArgs,
     env,
     timeout: 60_000,
   });

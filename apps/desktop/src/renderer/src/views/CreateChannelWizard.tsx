@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../api';
 import { ApiErrorBanner, CheckboxField, InfoBanner, SelectField, TextAreaField, TextField } from '../components/Form';
 import { Icon } from '../components/Icon';
@@ -76,14 +76,25 @@ const STEPS = [
 ] as const;
 
 const PROVIDER_OPTIONS = [
-  { value: 'local', label: '本地目录（local）' },
   { value: 'local-host', label: '本机 Host（local-host）' },
+  { value: 'local', label: '本地目录（local）' },
   { value: 'ftp-http', label: 'FTP + HTTP（ftp-http）' },
   { value: 's3', label: 'S3 / MinIO（s3）' },
 ];
 
 /** advertiseHost 只能是主机名或 IPv4（与协议/主进程 schema 保持一致）。 */
 const ADVERTISE_HOST_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/;
+
+/** local-host 端口建议的起始值。 */
+const DEFAULT_LOCAL_HOST_PORT = 8787;
+
+/** 从 8787 开始找最小的、未被现有 local-host 频道使用的端口。 */
+function suggestLocalHostPort(usedPorts: readonly number[]): number {
+  const used = new Set(usedPorts);
+  let candidate = DEFAULT_LOCAL_HOST_PORT;
+  while (used.has(candidate) && candidate < 65535) candidate += 1;
+  return candidate;
+}
 
 /** 创建频道向导：基础信息 → 存储 provider 配置 → 确认创建（含 probe/进度/错误）。 */
 export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardProps) {
@@ -96,16 +107,20 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
   const [visibility, setVisibility] = useState<Visibility>('public');
   const [ownerName, setOwnerName] = useState('');
   const [ownerContact, setOwnerContact] = useState('');
-  const [provider, setProvider] = useState<StorageProvider>('ftp-http');
+  const [provider, setProvider] = useState<StorageProvider>('local-host');
   const [local, setLocal] = useState<LocalForm>({ rootDir: '', publicBaseUrl: '' });
   // 默认对局域网开放（0.0.0.0）：本机 Host 的主要用途是让同一局域网的其他设备订阅。
   const [localHost, setLocalHost] = useState<LocalHostForm>({
     rootDir: '',
-    port: '8787',
+    port: String(DEFAULT_LOCAL_HOST_PORT),
     bindHost: '0.0.0.0',
     advertiseHost: '',
     publicBaseUrl: '',
   });
+  /** 现有 local-host 频道已使用的端口（来自 host.list）。 */
+  const [usedPorts, setUsedPorts] = useState<number[]>([]);
+  /** 用户手动改过端口后，不再自动覆盖建议值。 */
+  const portTouchedRef = useRef(false);
   const [ftp, setFtp] = useState<FtpForm>({
     host: '',
     port: '21',
@@ -130,6 +145,26 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
   const [submitError, setSubmitError] = useState<ApiError | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // 挂载时读取现有 local-host 频道占用的端口，自动避开并推荐未占用端口；失败静默忽略。
+  useEffect(() => {
+    let cancelled = false;
+    const loadUsedPorts = async () => {
+      const result = await api.host.list();
+      if (cancelled || !result.ok) return;
+      const ports = result.value
+        .map((host) => host.configuredPort)
+        .filter((port) => Number.isInteger(port) && port > 0);
+      setUsedPorts(ports);
+      if (!portTouchedRef.current) {
+        setLocalHost((current) => ({ ...current, port: String(suggestLocalHostPort(ports)) }));
+      }
+    };
+    void loadUsedPorts();
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
+
   const validateStep1 = (): FieldErrors => {
     const next: FieldErrors = {};
     const trimmedName = name.trim();
@@ -151,6 +186,9 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
       if (!localHost.rootDir.trim()) next.localHostRootDir = '请选择或输入 Host 仓库根目录';
       const port = Number.parseInt(localHost.port, 10);
       if (!Number.isInteger(port) || port < 1 || port > 65535) next.localHostPort = '端口必须是 1-65535 的整数';
+      else if (usedPorts.includes(port)) {
+        next.localHostPort = `端口 ${port} 已被现有 local-host 频道使用，推荐 ${suggestLocalHostPort(usedPorts)}`;
+      }
       if (localHost.advertiseHost.trim() && !ADVERTISE_HOST_PATTERN.test(localHost.advertiseHost.trim())) {
         next.localHostAdvertiseHost = '只能是主机名或 IPv4（不含协议、端口、路径），例如 192.168.1.10';
       }
@@ -478,7 +516,17 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
               label="存储类型"
               testId="storage-provider-select"
               value={provider}
-              onChange={(value) => setProvider(value as StorageProvider)}
+              onChange={(value) => {
+                const nextProvider = value as StorageProvider;
+                setProvider(nextProvider);
+                // 切回 local-host 且用户未手动改过端口时，按最新已用端口重新推荐。
+                if (nextProvider === 'local-host' && !portTouchedRef.current) {
+                  setLocalHost((current) => ({
+                    ...current,
+                    port: String(suggestLocalHostPort(usedPorts)),
+                  }));
+                }
+              }}
               options={PROVIDER_OPTIONS}
               required
               hint="发布端把 channel.json / App 文件写到这里；订阅者通过对应的 HTTP 地址读取。"
@@ -555,13 +603,18 @@ export function CreateChannelWizard({ onClose, onCreated }: CreateChannelWizardP
                     testId="local-host-port"
                     value={localHost.port}
                     onChange={(value) => {
+                      portTouchedRef.current = true;
                       setLocalHost((current) => ({ ...current, port: value }));
                       clearError('localHostPort');
                     }}
                     required
                     type="number"
                     placeholder="8787"
-                    hint="默认 8787；如果端口被占用，启动时会报错，可在这里换一个。"
+                    hint={
+                      usedPorts.length > 0
+                        ? `已用端口：${usedPorts.join('、')}；已自动避开已使用端口，推荐 ${suggestLocalHostPort(usedPorts)}。手动修改后不再自动调整。`
+                        : '默认 8787；如果端口被占用，启动时会报错，可在这里换一个。'
+                    }
                     error={errors.localHostPort}
                     disabled={submitting}
                     mono

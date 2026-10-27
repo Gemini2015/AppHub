@@ -28,6 +28,7 @@ AppHub 是一个基于 **Electron + React + TypeScript** 的跨平台桌面应�
 | app.meta.json 含历史版本 + files.json | 每版本完整文件清单；`app.meta.json` 保留全部历史 |
 | 频道配置 App 存储 | 创建频道时配置 `local` / `local-host` / `ftp-http` / `s3`（可扩展） |
 | 本机 Host 一键分享 | 内置 Host Server 直接托管本地目录，默认监听局域网，生成可分享的 `channel.json` URL，可随时启停 |
+| 数据目录可迁移 | 设置中可修改 AppHub 数据目录：复制频道记录/本地库/加密配置到新目录并重启（环境变量固定时只读） |
 | FTP + nginx 存储发布 | FTP 上传 + nginx 下载；也支持本地目录/MinIO |
 | 完整的测试方案 | 单元 + 集成（进程内 FTP/HTTP/S3 模拟）+ Electron E2E + 手工矩阵，见 [docs/TESTING.md](./docs/TESTING.md) |
 
@@ -96,19 +97,19 @@ pnpm demo           # 无需 GUI 的全链路演示：FTP+nginx 频道 + 本机 
 
 > 开发/测试环境使用 `APPHUB_USER_DATA_DIR` 可以指定独立数据目录，便于多实例与 E2E 测试。
 
-## 验收结果（本机实测，2026-10-27，含本机 Host）
+## 验收结果（本机实测，2026-10-27，含本机 Host 与数据目录设置）
 
 | 项目 | 结果 |
 | --- | --- |
-| `pnpm verify:e2e`（6 包 test + 6 包 typecheck + build + E2E） | **14/14 步通过，PASS，61.5s** |
-| Vitest 单元/集成测试 | **445 个用例，0 skipped**（protocol 27 / storage 56 / core 118 / 集成 37 / desktop 207） |
-| Electron E2E（Playwright + 真实 Electron） | **9/9 通过**（启动、订阅→安装→校验→卸载、错误处理、创建/发布向导、本机 Host 创建/启停/URL 可达/私密能力链接） |
+| `pnpm verify:e2e`（6 包 test + 6 包 typecheck + build + E2E） | **14/14 步通过，PASS，72.2s** |
+| Vitest 单元/集成测试 | **493 个用例，0 skipped**（protocol 27 / storage 56 / core 118 / 集成 37 / desktop 255） |
+| Electron E2E（Playwright + 真实 Electron） | **15/15 通过**（启动、订阅→安装→校验→卸载、错误处理、创建/发布向导、本机 Host 创建/启停/URL 可达/私密能力链接、默认 local-host、端口自动避让、数据目录三种来源展示） |
 | `@apphub/core` 覆盖率（v8，含 HostServer） | statements 85.9% / branches 77.4% / functions 92.3% |
 | `pnpm demo`（真实进程内 FTP + 静态 HTTP + 本机 Host） | ftp+nginx 全链路 + **local-host 创建→发布→启动 Host→订阅安装→停止/重启验证** 全部通过 |
 | `pnpm package`（electron-builder --dir） | `apps/desktop/release/win-unpacked/AppHub.exe` 生成成功 |
 | 环境 | Windows / Node 22.23 / pnpm 11.22 / Electron 38.8 / 完全离线 |
 
-> 测试分层、需求覆盖矩阵（R1–R59）、手工验收清单（M1–M27，需要真实 ftp+nginx/MinIO/两台设备局域网/三平台实机）与 CI 配置见 [docs/TESTING.md](./docs/TESTING.md)。
+> 测试分层、需求覆盖矩阵（R1–R64）、手工验收清单（M1–M31，需要真实 ftp+nginx/MinIO/两台设备局域网/三平台实机/数据目录迁移）与 CI 配置见 [docs/TESTING.md](./docs/TESTING.md)。
 
 ## 使用指南
 
@@ -136,10 +137,10 @@ pnpm demo           # 无需 GUI 的全链路演示：FTP+nginx 频道 + 本机 
 
 ### 1.1 更简单：用「本机 Host」分享（无需 FTP/nginx）
 
-如果 App 就在你自己的电脑上，可以直接用 AppHub 内置的 Host Server：
+如果 App 就在你自己的电脑上，可以直接用 AppHub 内置的 Host Server（创建频道时**默认存储类型就是本机 Host**）：
 
-1. **创建频道** → 存储类型选 **本机 Host（local-host）**；
-2. 选择/填写一个本地文件夹作为频道仓库目录（`rootDir`），端口默认 `8787`；
+1. **创建频道** → 存储类型默认 **本机 Host（local-host）**；
+2. 选择/填写一个本地文件夹作为频道仓库目录（`rootDir`）；端口默认从 `8787` 起，**会自动避开已有频道已使用的端口**（如 8787 已被占用则推荐 8788）；
 3. 访问范围默认 **局域网可访问（0.0.0.0）**；仅本机调试可切 `127.0.0.1`。首次启动如弹出系统防火墙提示，请允许专用网络；
 4. 可选填写「对外主机名/IP」或「公开基础地址覆盖」——用于固定分享地址或反向代理；
 5. 创建成功后 Host 会尝试自动启动，也可在频道详情页随时 **启动 / 停止**；
@@ -192,6 +193,18 @@ pnpm demo           # 无需 GUI 的全链路演示：FTP+nginx 频道 + 本机 
 | `s3` | S3 API（minio SDK） | 公开桶 HTTP / 预签名 URL | MinIO、AWS S3、兼容对象存储 |
 
 详见 [docs/STORAGE.md](./docs/STORAGE.md)。新增存储后端只需实现 `StorageAdapter` 接口并在 `packages/storage/src/factory.ts` 注册。
+
+### 6. 数据目录与设置
+
+在 **设置 / 关于** 页可以查看当前数据目录（频道记录、加密的 `channel_pri.json`、本地库与安装文件都在这里），并支持修改：
+
+1. 点击「更改数据目录」→ 选择一个**空目录**（或尚不存在的目录）；
+2. 确认后 AppHub 会：关闭本机 Host → 把频道记录/本地库/加密配置复制到新目录 → 写入引导配置 → 自动重启 App；
+3. 旧目录不会自动删除，请确认新目录工作正常后自行清理。
+
+> 通过环境变量 `APPHUB_USER_DATA_DIR` 启动时，数据目录由环境变量固定，设置页只读显示、不允许修改（用于测试/多实例隔离）。
+> 数据目录中包含加密后的存储凭据，请选择可信位置；迁移/恢复默认目录均需重启 App 生效。
+> 若自定义数据目录在启动时不可用（移动盘拔出/权限变化），App 会提示「恢复默认数据目录并重启 / 退出」，不会静默退出。
 
 ## 开发与测试
 

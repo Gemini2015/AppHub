@@ -6,6 +6,7 @@ import {
   createMockApi,
   fail,
   makeChannelDetail,
+  makeHostStatus,
   ok,
 } from '../../test/mock-api';
 import { renderWithApi, screen, userEvent, waitFor } from '../../test/render';
@@ -178,5 +179,98 @@ describe('创建频道向导 - 本机 Host（local-host）', () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(created));
     expect(await screen.findByText(/本机 Host 启动失败/)).toBeInTheDocument();
     expect(screen.getAllByText(/端口 8787 已被占用/).length).toBeGreaterThan(0);
+  });
+
+  it('端口自动建议：8787 已被现有 local-host 频道使用 → 推荐 8788', async () => {
+    const api = createMockApi({
+      host: { list: vi.fn().mockResolvedValue(ok([makeHostStatus({ configuredPort: 8787 })])) },
+    });
+    renderWizard(api);
+    const user = userEvent.setup();
+
+    await openLocalHostStep(user);
+    const portInput = screen.getByTestId('local-host-port') as HTMLInputElement;
+
+    await waitFor(() => expect(portInput.value).toBe('8788'));
+    expect(api.host.list).toHaveBeenCalled();
+    expect(screen.getByText(/已用端口：8787/)).toBeInTheDocument();
+    expect(screen.getByText(/推荐 8788/)).toBeInTheDocument();
+  });
+
+  it('端口自动建议：8787/8788 都已占用 → 推荐 8789', async () => {
+    const api = createMockApi({
+      host: {
+        list: vi.fn().mockResolvedValue(
+          ok([
+            makeHostStatus({ configuredPort: 8787 }),
+            makeHostStatus({ channelId: 'ch_second', configuredPort: 8788 }),
+          ]),
+        ),
+      },
+    });
+    renderWizard(api);
+    const user = userEvent.setup();
+
+    await openLocalHostStep(user);
+    const portInput = screen.getByTestId('local-host-port') as HTMLInputElement;
+
+    await waitFor(() => expect(portInput.value).toBe('8789'));
+    expect(screen.getByText(/推荐 8789/)).toBeInTheDocument();
+  });
+
+  it('手动修改端口后切换 provider 不再自动覆盖', async () => {
+    const api = createMockApi({
+      host: { list: vi.fn().mockResolvedValue(ok([makeHostStatus({ configuredPort: 8787 })])) },
+    });
+    renderWizard(api);
+    const user = userEvent.setup();
+
+    await openLocalHostStep(user);
+    const portInput = screen.getByTestId('local-host-port') as HTMLInputElement;
+    await waitFor(() => expect(portInput.value).toBe('8788'));
+
+    await user.clear(portInput);
+    await user.type(portInput, '9000');
+
+    const providerSelect = screen.getByTestId('storage-provider-select');
+    await user.selectOptions(providerSelect, 'local');
+    await user.selectOptions(providerSelect, 'local-host');
+
+    expect((screen.getByTestId('local-host-port') as HTMLInputElement).value).toBe('9000');
+  });
+
+  it('端口与现有频道重复时提交前给出 inline 错误并推荐可用端口', async () => {
+    const api = createMockApi({
+      host: { list: vi.fn().mockResolvedValue(ok([makeHostStatus({ configuredPort: 8787 })])) },
+    });
+    renderWizard(api);
+    const user = userEvent.setup();
+
+    await openLocalHostStep(user);
+    await user.type(screen.getByTestId('local-host-root-dir'), 'D:/AppHub/repo');
+    const portInput = screen.getByTestId('local-host-port');
+    await waitFor(() => expect((portInput as HTMLInputElement).value).toBe('8788'));
+    await user.clear(portInput);
+    await user.type(portInput, '8787');
+    await user.click(screen.getByTestId('create-channel-next'));
+
+    expect(
+      await screen.findByText('端口 8787 已被现有 local-host 频道使用，推荐 8788'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('请确认频道配置')).not.toBeInTheDocument();
+    expect(api.channels.create).not.toHaveBeenCalled();
+  });
+
+  it('host.list 失败时静默忽略，仍使用默认端口', async () => {
+    const api = createMockApi({
+      host: { list: vi.fn().mockResolvedValue(fail('INTERNAL', 'host 服务不可用')) },
+    });
+    renderWizard(api);
+    const user = userEvent.setup();
+
+    await openLocalHostStep(user);
+
+    expect((screen.getByTestId('local-host-port') as HTMLInputElement).value).toBe('8787');
+    expect(screen.getByTestId('local-host-root-dir')).toBeInTheDocument();
   });
 });

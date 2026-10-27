@@ -137,7 +137,7 @@ channel.json                                  # 公开频道描述（私密频�
 <appId>/<version>/<appId>-<version>.zip       # zip 发布内容（entry 为 zip 内路径）
 ```
 
-### 4.2 本地数据目录（Electron `app.getPath('userData')`）
+### 4.2 本地数据目录（默认 Electron `app.getPath('userData')`，可配置）
 
 ```
 apphub.json                                   # 本地设置（schemaVersion, settings）
@@ -151,6 +151,13 @@ tmp/                                          # 下载/解压/打包临时目录
 logs/                                         # 可选日志
 ```
 
+- 数据目录可配置：引导文件 `<Electron userData>/apphub-bootstrap.json` 记录自定义 `dataDir`；
+  启动时解析优先级 **`APPHUB_USER_DATA_DIR` 环境变量 > bootstrap 自定义目录 > Electron 默认 userData**；
+- 设置页修改数据目录时：关闭 core（含所有本机 Host）→ 仅复制 AppHub 管理的数据（`channels.json`、
+  `channels/`、`secrets/`、`library/`、`apphub.json`，不复制 `tmp/`、日志与 Chromium 文件）→ 写回
+  bootstrap 配置 → 自动重启生效；环境变量模式下数据目录只读；
+- 启动时若自定义数据目录不可用（移动盘/权限/目录被删），主进程记录错误并提供原生对话框：
+  「恢复默认数据目录并重启」或「退出」，避免用户因数据目录故障而无法进入 App；
 - 本地所有 JSON 使用"写临时文件 + rename"的原子写入；
 - 下载/解压全部先落到 `tmp/` 或 staging 目录，校验通过后才移动到最终位置；
 - `channel_pri.json` 明文只在"导出给管理员"时由主进程写盘，其余时间只有密文。
@@ -213,6 +220,7 @@ interface StorageAdapter {
 src/main/index.ts            app 生命周期、单实例、安全策略、加载窗口
 src/main/window.ts           BrowserWindow 创建（sandbox/contextIsolation/CSP/导航拦截）
 src/main/core-manager.ts     createAppHubCore 注入 dataDir/secretBox/storageFactory/fetch
+src/main/data-dir.ts         数据目录引导配置（bootstrap）、来源解析、目标校验与迁移
 src/main/secret-box.ts       Electron safeStorage 实现 core.SecretBox
 src/main/selection-registry.ts  文件/文件夹/zip 选择 + token 映射 + zip 检查
 src/main/ipc.ts              IPC handlers：zod 校验 + ApiResult 包装 + 事件推送（含 host start/stop/status/list/updateConfig、system.pickDirectory）
@@ -226,7 +234,8 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 - IPC handler 统一用 `wrap(handler)` 捕获错误转 `{ok:false,error}`；
 - 每次操作 push `progress` 事件（带 operationId）与 `data-changed` 事件（host 启停使用 `domain:'host'`）；
 - Host 服务运行在主进程内，随 App 退出自动停止（core.close → host.stopAll）；
-- 环境变量：`APPHUB_USER_DATA_DIR`（测试/多实例）、`APPHUB_DEV_SERVER_URL`（开发模式）；
+- 环境变量：`APPHUB_USER_DATA_DIR`（测试/多实例；此时设置页数据目录只读）、`APPHUB_DEV_SERVER_URL`（开发模式）；
+- 数据目录修改：设置页调用 `system.changeDataDir` → 主进程关闭 core/Host → 迁移 AppHub 管理数据 → 写 bootstrap → 重启 App；
 - 构建产物：`out/main/index.cjs`、`out/preload/index.cjs`、`out/renderer/`（Vite 构建）。
 
 ### 5.4 渲染进程（React UI）
@@ -238,7 +247,7 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 3. **App 详情**：简介、各平台最新版本、版本历史（changelog）、安装/更新/已安装状态、发布新版本；
 4. **发布向导**：选择发布方式（散文件/zip）、选文件/文件夹/zip、版本号、平台、入口、changelog、进度/错误展示；
 5. **本地库**：已安装 App 列表、更新检测、安装/更新/校验/启动/打开目录/卸载；
-6. **设置/关于**：数据目录、版本信息、日志位置。
+6. **设置/关于**：数据目录（来源/默认目录/打开/复制/迁移重启）、版本信息、日志位置。
 
 要求：TypeScript 严格模式；不直接使用 Node/Electron API，只通过 `window.apphub`；错误以 toast/inline 形式呈现；关键交互有 loading/disabled 状态；所有主要视图有 React Testing Library 测试。
 
@@ -250,6 +259,7 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 - `AppHubApi` 是 `window.apphub` 的类型；
 - 渲染进程只能传 selectionId（发布文件路径不进入渲染进程）；**唯一例外**：local-host 的频道仓库目录通过 `system.pickDirectory` 让用户选择后返回路径字符串（用户显式选择，不用于其他文件读写）；
 - 新增 `host` 命名空间（start/stop/status/list/updateConfig）；host 变更广播 `data-changed {domain:'host'}`；
+- 新增 `system.changeDataDir`（路径由目录选择器产生，主进程校验/迁移/重启）；环境变量模式下返回 `UNSUPPORTED`；
 - 主进程必须校验 sender frame（只接受自家窗口）。
 
 ## 7. 并发与一致性
@@ -271,11 +281,11 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 
 ## 9. 交付验收清单
 
-- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（445 个 Vitest 用例，0 skipped）；
+- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（493 个 Vitest 用例，0 skipped）；
 - [x] `pnpm build` 产出 `out/`，`pnpm dev` 可启动应用；`pnpm package` 产出 `apps/desktop/release/win-unpacked/AppHub.exe`；
 - [x] 演示脚本 `pnpm demo` 在 FTP+nginx 模拟环境与本机 Host 环境下完成创建/发布/订阅/安装/更新/启停验证；
 - [x] README 的 Quickstart 与截图一致；
-- [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5；Phase 5 本机 Host 为新增能力 R48–R59）；
+- [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5；Phase 5 本机 Host R48–R59、Phase 6 默认 local-host/端口避让/数据目录 R60–R64）；
 - [x] docs/PROTOCOL.md、STORAGE.md、TESTING.md 完整；
-- [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 9/9，覆盖本机 Host 启停与 URL 可达）。
+- [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 15/15，覆盖本机 Host 启停与 URL 可达、端口避让、数据目录来源展示）。
 

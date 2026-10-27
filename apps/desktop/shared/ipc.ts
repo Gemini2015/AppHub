@@ -29,6 +29,7 @@ export const IPC_CHANNELS = {
   systemInfo: 'apphub:system:info',
   systemOpenDataDir: 'apphub:system:open-data-dir',
   systemPickDirectory: 'apphub:system:pick-directory',
+  systemChangeDataDir: 'apphub:system:change-data-dir',
 
   channelsList: 'apphub:channels:list',
   channelsGet: 'apphub:channels:get',
@@ -330,8 +331,26 @@ export interface SystemInfoDTO {
   platform: string;
   arch: string;
   dataDir: string;
+  /** 数据目录来源：Electron 默认 / 用户在设置中自定义 / 环境变量固定。 */
+  dataDirSource: 'default' | 'custom' | 'env';
+  /** 是否允许在设置中修改数据目录（环境变量固定时为 false）。 */
+  dataDirEditable: boolean;
+  /** Electron 默认 userData 目录（用于展示与"恢复默认"说明）。 */
+  defaultDataDir: string;
   channelCount: number;
   installedCount: number;
+}
+
+export interface ChangeDataDirRequestDTO {
+  /** 新的 AppHub 数据目录（绝对路径）。 */
+  path: string;
+}
+
+export interface ChangeDataDirResultDTO {
+  previousDataDir: string;
+  newDataDir: string;
+  /** 变更将在 App 重启后生效。 */
+  restarting: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -402,8 +421,10 @@ export interface AppHubApi {
   system: {
     info(): Promise<ApiResult<SystemInfoDTO>>;
     openDataDir(): Promise<ApiResult<void>>;
-    /** 选择本地目录（用于 local-host 的 rootDir 等），取消返回 null。 */
+    /** 选择本地目录（用于 local-host 的 rootDir / 数据目录等），取消返回 null。 */
     pickDirectory(): Promise<ApiResult<string | null>>;
+    /** 迁移并修改 AppHub 数据目录（关闭 core → 复制数据 → 写引导配置 → 重启 App）。 */
+    changeDataDir(input: ChangeDataDirRequestDTO): Promise<ApiResult<ChangeDataDirResultDTO>>;
   };
   channels: {
     list(): Promise<ApiResult<ChannelSummaryDTO[]>>;

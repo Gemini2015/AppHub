@@ -5,6 +5,8 @@ import type {
   ApiResult,
   AppDetailDTO,
   AppHubApi,
+  ChangeDataDirRequestDTO,
+  ChangeDataDirResultDTO,
   ChannelDetailDTO,
   ChannelSummaryDTO,
   DataChangedEventDTO,
@@ -64,6 +66,8 @@ const api: AppHubApi = {
     info: () => invoke<SystemInfoDTO>(IPC_CHANNELS.systemInfo),
     openDataDir: () => invoke<void>(IPC_CHANNELS.systemOpenDataDir),
     pickDirectory: () => invoke<string | null>(IPC_CHANNELS.systemPickDirectory),
+    changeDataDir: (input: ChangeDataDirRequestDTO) =>
+      invoke<ChangeDataDirResultDTO>(IPC_CHANNELS.systemChangeDataDir, input),
   },
   channels: {
     list: () => invoke<ChannelSummaryDTO[]>(IPC_CHANNELS.channelsList),
