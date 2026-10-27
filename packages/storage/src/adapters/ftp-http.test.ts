@@ -62,6 +62,8 @@ describe('FtpHttpStorageAdapter', () => {
         user: ftpServer.user,
         password: ftpServer.password,
         rootDir: rootDirSetting,
+        // GitHub Actions Windows runner 可能较慢；给 socket 留出更充足的超时。
+        timeoutMs: 60_000,
         ...overrides,
       },
       http: { baseUrl: staticServer.baseUrl },

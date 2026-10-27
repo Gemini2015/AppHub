@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import type { AddressInfo, Server } from 'node:net';
+import net from 'node:net';
 import path from 'node:path';
 import FtpSrv from 'ftp-srv';
 import { createTempDir, safeRemove } from './temp';
@@ -22,7 +23,7 @@ export interface FtpTestServerOptions {
   host?: string;
   /** 控制端口，默认 0（系统分配空闲端口）。 */
   port?: number;
-  /** 被动模式端口段起点，默认随机 40000-55000。 */
+  /** 被动模式端口段起点，默认自动探测一个空闲端口段（避开 Windows 保留/临时端口范围）。 */
   passivePortMin?: number;
   /** 被动模式端口段终点。 */
   passivePortMax?: number;
@@ -65,6 +66,51 @@ function createSilentLogger(): SilentLogger {
   return logger;
 }
 
+function canBindPort(port: number, host: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    const finish = (ok: boolean): void => {
+      server.removeAllListeners();
+      resolve(ok);
+    };
+    server.once('error', () => finish(false));
+    try {
+      server.listen(port, host, () => {
+        server.close(() => finish(true));
+      });
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+/**
+ * 选择一个当前可监听的被动端口段。
+ *
+ * Windows GitHub Runner 上 49152+ 属于系统临时端口范围，且可能存在
+ * Hyper-V/防火墙保留端口段；若 ftp-srv 的被动端口落在这些范围内，
+ * 数据传输会卡住（basic-ftp 最终报 "Timeout (control socket)"）。
+ * 因此默认在较低端口中探测一段全部可绑定的端口，而不是随机取 40000+。
+ */
+async function findFreePassivePortRange(host: string, size = 150): Promise<{ min: number; max: number }> {
+  const candidateBases = [20_000, 22_000, 24_000, 26_000, 28_000, 30_000, 32_000, 34_000, 36_000, 38_000];
+  for (const base of candidateBases) {
+    let available = true;
+    for (let port = base; port < base + size; port += 1) {
+      // 候选段整体探测，避免部分端口被系统保留/占用导致 FTP 数据连接偶发失败。
+      // 每个端口只做一次 bind+close，正常情况（第一个候选段）≈150ms 内完成。
+      if (!(await canBindPort(port, host))) {
+        available = false;
+        break;
+      }
+    }
+    if (available) return { min: base, max: base + size - 1 };
+  }
+  // 兜底：旧行为（极少数环境所有候选段都不可用）
+  const min = 20_000 + Math.floor(Math.random() * 20_000);
+  return { min, max: min + size - 1 };
+}
+
 /** ftp-srv 内部结构（类型声明未暴露 server 字段）。 */
 interface FtpSrvInternals {
   server: Server;
@@ -102,9 +148,14 @@ export async function startFtpTestServer(
   const password = options.password ?? 'apphub-test-password';
   const anonymous = options.anonymous ?? false;
   const port = options.port ?? 0;
-  // 每个服务器实例使用随机的被动端口段：并行测试时互不干扰，失败时还有 5 次重试。
-  const passivePortMin = options.passivePortMin ?? 40_000 + Math.floor(Math.random() * 15_000);
-  const passivePortMax = options.passivePortMax ?? Math.min(passivePortMin + 500, 65_535);
+  // 每个服务器实例使用自动探测的被动端口段：并行测试时互不干扰，并避开
+  // Windows 系统临时端口/保留端口段（否则 FTP 数据连接会超时）。
+  const detectedPassiveRange =
+    options.passivePortMin === undefined && options.passivePortMax === undefined
+      ? await findFreePassivePortRange(host)
+      : null;
+  const passivePortMin = options.passivePortMin ?? detectedPassiveRange?.min ?? 20_000;
+  const passivePortMax = options.passivePortMax ?? detectedPassiveRange?.max ?? Math.min(passivePortMin + 500, 65_535);
 
   const server = createWithoutSignalHandlers(
     () =>

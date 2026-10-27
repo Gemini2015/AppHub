@@ -22,7 +22,17 @@ import {
 /** POSIX 版 path.dirname / basename，FTP 远端路径始终使用 `/` 分隔。 */
 const remotePath = path.posix;
 
-/** 把 pwd() 返回的目录（部分服务器在 Windows 上返回 `\`）归一化为 POSIX 绝对路径。 */
+/** 判断 FTP 错误是否属于可重试的瞬时网络/传输失败（连接已坏时自动重连一次）。 */
+function isRetryableFtpFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /timeout|timed out|closed|transfer strategies|ECONNRESET|EPIPE|socket hang up|421|425|426/i.test(
+    message,
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 function normalizeRemoteRoot(pwd: string): string {
   let normalized = pwd.replace(/\\/g, '/').trim();
   if (normalized === '') return '/';
@@ -107,14 +117,41 @@ export class FtpHttpStorageAdapter implements StorageAdapter {
 
   private async withClient<T>(action: string, task: (client: Client) => Promise<T>): Promise<T> {
     return this.enqueue(async () => {
-      try {
-        const client = await this.connect();
-        return await task(client);
-      } catch (error) {
-        if (this.client?.closed) this.client = null;
-        throw mapFtpError(error, action);
+      let lastError: unknown;
+      // 长连接可能被服务器/网络中间设备关闭；若操作开始时已有连接，
+      // 对瞬时错误（timeout/transfer strategies 等）重连并重试一次。
+      // 每次操作都是幂等的（覆盖写/读/删/列目录），重试不会造成副作用。
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        const hadConnection = this.client !== null && !this.client.closed;
+        try {
+          const client = await this.connect();
+          return await task(client);
+        } catch (error) {
+          const mapped = mapFtpError(error, action);
+          if (this.client?.closed) this.client = null;
+          lastError = mapped;
+          if (attempt < 2 && hadConnection && isRetryableFtpFailure(error)) {
+            this.resetClient();
+            await sleep(300);
+            continue;
+          }
+          throw mapped;
+        }
       }
+      throw lastError instanceof AppError ? lastError : mapFtpError(lastError, action);
     });
+  }
+
+  private resetClient(): void {
+    const client = this.client;
+    this.client = null;
+    if (client) {
+      try {
+        client.close();
+      } catch {
+        // 已因错误关闭
+      }
+    }
   }
 
   private remotePathOf(key: string): string {
