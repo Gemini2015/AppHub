@@ -586,33 +586,40 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 11 }
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      # 不传 version：使用 package.json 的 packageManager（pnpm@11.22.0），
+      # 避免 "Multiple versions of pnpm specified" 错误。
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify:e2e
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-report-windows
           path: apps/desktop/e2e/.tmp
   linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 11 }
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: pnpm }
-      - run: sudo apt-get update && sudo apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2
+      - run: |
+          sudo apt-get update
+          if apt-cache show libasound2t64 >/dev/null 2>&1; then
+            EXTRA="libasound2t64 libatk-bridge2.0-0t64 libgtk-3-0t64"
+          else
+            EXTRA="libasound2 libatk-bridge2.0-0 libgtk-3-0"
+          fi
+          sudo apt-get install -y xvfb libnss3 libgbm1 libxss1 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 libpango-1.0-0 libcairo2 $EXTRA
       - run: pnpm install --frozen-lockfile
       - run: xvfb-run -a pnpm verify:e2e
         env:
-          APPHUB_E2E_ELECTRON_ARGS: --no-sandbox
+          APPHUB_E2E_ELECTRON_ARGS: --no-sandbox --disable-gpu
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-report-linux
           path: apps/desktop/e2e/.tmp
@@ -621,6 +628,7 @@ jobs:
 说明：
 
 - 仓库已提交实际工作流 [`.github/workflows/verify.yml`](../.github/workflows/verify.yml)，内容与上例一致（Windows + Linux/xvfb 两个 job，跑 `pnpm verify:e2e` 并上传 E2E 报告）；
+- **pnpm 版本只由 `package.json` 的 `packageManager`（`pnpm@11.22.0`）决定**：`pnpm/action-setup` 不要同时配置 `version` 输入，否则会出现 `Multiple versions of pnpm specified` / `ERR_PNPM_BAD_PM_VERSION`；
 - 不需要 `playwright install`（Electron 自带 Chromium）；
 - 若 CI 环境预置了 `ELECTRON_RUN_AS_NODE`，verify.mjs / E2E helper 会自动清理；
 - macOS runner 可跑同一套命令（`pnpm verify:e2e`，无需 xvfb）。
