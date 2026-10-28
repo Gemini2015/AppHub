@@ -15,9 +15,11 @@ import {
   copyFileEnsured,
   ensureDir,
   hashFile,
+  moveDirectoryAtomic,
   pathExists,
   progressPercent,
   removePath,
+  renameWithRetry,
   safeJoin,
   statOrNull,
   uniqueSuffix,
@@ -428,17 +430,17 @@ export class LibraryServiceImpl implements LibraryService {
       let backupDir: string | undefined;
       if (await pathExists(versionDir)) {
         backupDir = `${versionDir}.bak-${operationId}`;
-        await fs.rename(versionDir, backupDir);
+        // Windows 上目录 rename 也可能被杀软/索引器短暂占用：沿用 rename 重试。
+        await renameWithRetry(versionDir, backupDir);
       }
       let committed = false;
       try {
-        await fs.rename(stagingDir, versionDir);
+        // staging → versions/<version>：rename 重试 + 复制回退，避免 Windows EPERM 导致安装失败
+        await moveDirectoryAtomic(stagingDir, versionDir);
         committed = true;
       } catch (error) {
-        if (backupDir) {
-          await fs.rename(backupDir, versionDir).catch(() => undefined);
-        }
-        throw AppError.from(error, 'IO');
+        if (backupDir) await this.restoreVersionDir(backupDir, versionDir);
+        throw AppError.from(error);
       }
       const nowIso = this.deps.clock.now().toISOString();
       const installRecord: InstalledRecord = {
@@ -464,7 +466,7 @@ export class LibraryServiceImpl implements LibraryService {
       } catch (error) {
         // 指针写入失败：撤销新版本目录，恢复备份，保证旧版本可用
         if (committed) await removePath(versionDir).catch(() => undefined);
-        if (backupDir) await fs.rename(backupDir, versionDir).catch(() => undefined);
+        if (backupDir) await this.restoreVersionDir(backupDir, versionDir);
         throw AppError.from(error);
       }
       if (backupDir) await removePath(backupDir).catch(() => undefined);
@@ -612,6 +614,19 @@ export class LibraryServiceImpl implements LibraryService {
       if (entry.isDirectory() && entry.name.includes('.bak-')) {
         await removePath(path.join(versionsDir, entry.name)).catch(() => undefined);
       }
+    }
+  }
+
+  /** 提交失败时恢复旧版本目录（best-effort；rename 重试，不阻塞错误上报）。 */
+  private async restoreVersionDir(backupDir: string, versionDir: string): Promise<void> {
+    try {
+      await renameWithRetry(backupDir, versionDir);
+    } catch (error) {
+      this.deps.logger?.warn('恢复旧版本目录失败，请检查本地 library 目录', {
+        backupDir,
+        versionDir,
+        reason: AppError.from(error).message,
+      });
     }
   }
 

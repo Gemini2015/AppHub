@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { appMetaKey, versionArchiveKey } from '@apphub/protocol';
 import { createTempDir, md5Hex, pathExists, readJsonFile, safeRemove, writeZip } from '@apphub/testkit';
 import type { PublishFileInput } from './types';
@@ -140,6 +140,29 @@ describe('LibraryService.install - files 模式', () => {
     expect(descriptor.args).toEqual([]);
     expect(descriptor.appRoot).toBe(path.join(reader.dataDir, 'library', channelId, 'demo'));
     void publisher;
+  });
+
+  it('安装收尾 rename 遇到短暂 EPERM 时自动重试成功（Windows 兼容回归）', async () => {
+    const { reader, channelId } = await setupFilesPublished();
+    const targetFs = (await import('node:fs')).promises;
+    const originalRename = targetFs.rename.bind(targetFs);
+    let attempts = 0;
+    const spy = vi.spyOn(targetFs, 'rename').mockImplementation(async (from, to) => {
+      attempts += 1;
+      if (attempts <= 2) {
+        throw Object.assign(new Error('operation not permitted, rename'), { code: 'EPERM' });
+      }
+      return originalRename(from, to);
+    });
+    try {
+      const result = await reader.core.library.install({ channelId, appId: 'demo' });
+      expect(result.app.version).toBe('1.0.0');
+      // rename(staging → versions/1.0.0) 至少重试到第 3 次才成功
+      expect(attempts).toBeGreaterThanOrEqual(3);
+      expect((await reader.core.library.verify(channelId, 'demo')).ok).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('owner 通过存储适配器下载安装（不依赖频道 HTTP 地址）', async () => {

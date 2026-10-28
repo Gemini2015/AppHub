@@ -6,7 +6,7 @@ import { AppError } from '@apphub/protocol';
 import { createTempDir, makeZipBuffer, pathExists, safeRemove, sleep } from '@apphub/testkit';
 import { createAppHubCore, createZipFromDirectory, inspectZipArchive } from './index';
 import { KeyedMutex } from './mutex';
-import { hashFile, readJsonFile, safeJoin, writeJsonAtomic } from './fs';
+import { hashFile, moveDirectoryAtomic, readJsonFile, renameWithRetry, safeJoin, writeJsonAtomic } from './fs';
 import { redactUrl } from './errors';
 import { createTestEnv, expectAppError, type TestEnv } from './test-helpers';
 
@@ -209,6 +209,82 @@ describe('本地文件与状态基础设施', () => {
     expect(await readJsonFile<{ version: number }>(filePath, 'atomic.json')).toEqual({
       version: 2,
     });
+  });
+
+  it('renameWithRetry 对 EPERM/EBUSY 退避重试，成功后返回', async () => {
+    const dir = await tempDir();
+    const source = path.join(dir, 'from.txt');
+    const target = path.join(dir, 'to.txt');
+    await fs.writeFile(source, 'payload');
+    let calls = 0;
+    await renameWithRetry(source, target, {
+      attempts: 5,
+      baseDelayMs: 1,
+      renameImpl: async (from, to) => {
+        calls += 1;
+        if (calls <= 2) {
+          throw Object.assign(new Error('busy'), { code: 'EPERM' });
+        }
+        await fs.rename(from, to);
+      },
+    });
+    expect(calls).toBe(3);
+    expect(await fs.readFile(target, 'utf8')).toBe('payload');
+  });
+
+  it('renameWithRetry 只重试占用类错误（ENOENT 立即抛出）', async () => {
+    let calls = 0;
+    await expect(
+      renameWithRetry('missing-from', 'missing-to', {
+        attempts: 5,
+        baseDelayMs: 1,
+        renameImpl: async () => {
+          calls += 1;
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        },
+      }),
+    ).rejects.toThrow();
+    expect(calls).toBe(1);
+  });
+
+  it('moveDirectoryAtomic：rename 持续被占用时退回递归复制（安装 staging → versions 兜底）', async () => {
+    const dir = await tempDir();
+    const source = path.join(dir, 'staging');
+    const target = path.join(dir, 'versions', '1.0.0');
+    await fs.mkdir(path.join(source, 'nested'), { recursive: true });
+    await fs.writeFile(path.join(source, 'app.exe'), 'bin');
+    await fs.writeFile(path.join(source, 'nested', 'data.bin'), 'data');
+
+    const outcome = await moveDirectoryAtomic(source, target, {
+      attempts: 2,
+      baseDelayMs: 1,
+      renameImpl: async () => {
+        throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      },
+    });
+    expect(outcome).toBe('copy');
+    expect(await pathExists(source)).toBe(false);
+    expect(await fs.readFile(path.join(target, 'app.exe'), 'utf8')).toBe('bin');
+    expect(await fs.readFile(path.join(target, 'nested', 'data.bin'), 'utf8')).toBe('data');
+  });
+
+  it('moveDirectoryAtomic：rename 与复制回退都失败时抛 AppError IO（不映射为 AUTH）', async () => {
+    const dir = await tempDir();
+    const source = path.join(dir, 'staging');
+    await fs.mkdir(source);
+    await fs.writeFile(path.join(source, 'app.exe'), 'x');
+    const blocker = path.join(dir, 'blocker');
+    await fs.writeFile(blocker, 'this is a file');
+    // 目标父路径是普通文件 → 复制回退必然失败
+    const target = path.join(blocker, 'versions', '1.0.0');
+    await expect(
+      moveDirectoryAtomic(source, target, {
+        attempts: 1,
+        renameImpl: async () => {
+          throw Object.assign(new Error('busy'), { code: 'EPERM' });
+        },
+      }),
+    ).rejects.toMatchObject({ isAppHubError: true, code: 'IO' });
   });
 
   it('hashFile 计算 size+MD5（流式）', async () => {

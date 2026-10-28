@@ -16,31 +16,88 @@ const RETRYABLE_RENAME_ERROR_CODES = new Set(['EPERM', 'EBUSY', 'EACCES', 'ENOTE
 const RENAME_RETRY_ATTEMPTS = 5;
 const RENAME_RETRY_BASE_DELAY_MS = 10;
 
+export type RenameOperation = (from: string, to: string) => Promise<void>;
+
+export interface RenameRetryOptions {
+  /** 最大尝试次数（默认 5，最小 1）。 */
+  attempts?: number;
+  /** 退避基数毫秒（默认 10，按 1x/2x/3x… 递增）。 */
+  baseDelayMs?: number;
+  /** 测试注入的 rename 实现（默认 `fs.rename`）。 */
+  renameImpl?: RenameOperation;
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
 }
 
+/** 是否属于 Windows 上"文件/目录短暂被占用"类可重试错误。 */
+export function isRetryableRenameError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code !== undefined && RETRYABLE_RENAME_ERROR_CODES.has(code);
+}
+
 /**
- * rename 替换目标文件；对 Windows 上短暂的文件占用做有限重试。
+ * rename；对 Windows 上短暂的文件/目录占用做有限重试。
  * 只重试明确的占用类错误，其它错误（如 ENOENT/EXDEV）立即抛出。
  */
-async function renameWithRetry(from: string, to: string): Promise<void> {
+export async function renameWithRetry(
+  from: string,
+  to: string,
+  options: RenameRetryOptions = {},
+): Promise<void> {
+  const attempts = Math.max(1, Math.floor(options.attempts ?? RENAME_RETRY_ATTEMPTS));
+  const baseDelayMs = Math.max(0, options.baseDelayMs ?? RENAME_RETRY_BASE_DELAY_MS);
+  const rename = options.renameImpl ?? ((source: string, target: string) => fs.rename(source, target));
   let lastError: unknown;
-  for (let attempt = 1; attempt <= RENAME_RETRY_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      await fs.rename(from, to);
+      await rename(from, to);
       return;
     } catch (error) {
       lastError = error;
-      const code = (error as NodeJS.ErrnoException | undefined)?.code;
-      const retryable = code !== undefined && RETRYABLE_RENAME_ERROR_CODES.has(code);
-      if (!retryable || attempt === RENAME_RETRY_ATTEMPTS) break;
-      await delay(RENAME_RETRY_BASE_DELAY_MS * attempt);
+      if (!isRetryableRenameError(error) || attempt === attempts) break;
+      await delay(baseDelayMs * attempt);
     }
   }
   throw lastError;
+}
+
+/**
+ * 移动目录（安装 staging → `versions/<version>`）。
+ *
+ * 1) 先 rename（含 Windows 占用重试）；
+ * 2) rename 仍失败时退化为"递归复制 + 删除源目录"（跨卷/杀软持续占用兜底）；
+ * 3) 两者都失败时抛 AppError('IO')（不再被映射成 AUTH），并清理可能半成品目标目录。
+ */
+export async function moveDirectoryAtomic(
+  from: string,
+  to: string,
+  options: RenameRetryOptions = {},
+): Promise<'rename' | 'copy'> {
+  try {
+    await renameWithRetry(from, to, options);
+    return 'rename';
+  } catch (renameError) {
+    const renameCode = (renameError as NodeJS.ErrnoException | undefined)?.code;
+    try {
+      await ensureDir(path.dirname(to));
+      await fs.cp(from, to, { recursive: true, force: false, errorOnExist: true });
+      await removePath(from);
+      return 'copy';
+    } catch (copyError) {
+      await removePath(to).catch(() => undefined);
+      const detail = renameCode ? `（${renameCode}）` : '';
+      throw new AppError(
+        'IO',
+        `移动目录失败${detail}：${path.basename(from)} -> ${path.basename(to)}` +
+          `（rename 与复制回退均失败：${AppError.from(copyError).message}）`,
+        { code: renameCode },
+      );
+    }
+  }
 }
 
 /** 原子写入任意内容（tmp + rename；rename 对 Windows 占用做有限重试）。 */
