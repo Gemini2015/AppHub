@@ -295,3 +295,43 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 - [x] docs/PROTOCOL.md、STORAGE.md、TESTING.md 完整；
 - [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 17/17，覆盖本机 Host 启停与 URL 可达、端口避让、数据目录三种来源与旧版自动迁移）。
 
+## 10. 构建与发布（CI/CD）
+
+| 工作流 | 触发 | 作用 |
+| --- | --- | --- |
+| `.github/workflows/verify.yml` | push 到 `main/master`、PR、手动 | Windows + Linux/xvfb 跑 `pnpm verify:e2e`，上传 E2E 报告 |
+| `.github/workflows/release.yml` | push tag `v*`、手动 dispatch | Windows 跑完整验证后打包并发布 GitHub Release；手动 dispatch 只构建 artifact |
+
+**版本与标签约定**
+
+- Release tag 形如 `v<version>`，且必须同时等于根 `package.json` 与 `apps/desktop/package.json` 的 `version`；
+  tag 与版本不一致时 release 工作流在构建前失败（防止发布错版本）；
+- 发版流程：修改两处 `version` → 提交 → `git tag v<version>` → `git push origin master v<version>`；
+- 工作流不修改版本号、不自动提交，版本控制仍由维护者完成。
+
+**打包与产物**
+
+- `pnpm package`：保持 `electron-builder --dir`，仅产出 `apps/desktop/release/win-unpacked/`（开发/验收用）；
+- `pnpm dist:win`：`electron-builder --win nsis zip --publish never`，产出
+  - `AppHub-Setup-<version>.exe`（NSIS 安装器，x64，可选择安装目录）
+  - `AppHub-<version>-win-x64.zip`（免安装版，解压运行 `AppHub.exe`）
+  - `SHA256SUMS.txt`（工作流生成）
+- Linux/macOS 构建配置保留在 electron-builder 中，但当前 release 工作流只发布 Windows x64；
+- 当前不配置 Windows 代码签名，工作流不读取签名 secrets，也不做 SmartScreen 相关处理。
+
+**发布流程**
+
+1. tag 触发 release 工作流；`actions/checkout` 取完整历史，`pnpm install --frozen-lockfile`；
+2. 版本校验 → `pnpm verify:e2e` → `pnpm dist:win`；
+3. PowerShell 校验安装器/zip 存在、大小合理、zip 内包含 `AppHub.exe`，并生成 SHA-256 清单；
+4. 上传 Actions artifact（保留 14 天）；
+5. tag 构建时用 `gh release create`/`gh release upload --clobber` 创建或补传 Release 资产；
+   已存在同名 Release 时只补传资产，支持重跑；tag 含 `-` 时自动标记 prerelease。
+
+**权限与故障处理**
+
+- Release 工作流声明 `permissions: contents: write`；仓库需在
+  Settings → Actions → General → Workflow permissions 允许 read/write；
+- NSIS/electron-builder 工具下载失败、产物缺失或校验失败时 job 失败，不会发布残缺 Release；
+- 手动 dispatch 仅上传 artifact，不创建 Release，用于发布前试跑。
+

@@ -1,5 +1,8 @@
 # AppHub
 
+[![verify](https://github.com/Gemini2015/AppHub/actions/workflows/verify.yml/badge.svg)](https://github.com/Gemini2015/AppHub/actions/workflows/verify.yml)
+[![release](https://github.com/Gemini2015/AppHub/actions/workflows/release.yml/badge.svg)](https://github.com/Gemini2015/AppHub/actions/workflows/release.yml)
+
 > 去中心化的 App 分享、订阅与本地管理工具。
 >
 > 没有中心服务器：频道所有者用自己的存储（FTP + nginx / 本地目录 + 静态服务 / S3 / MinIO）托管 App；
@@ -88,6 +91,7 @@ pnpm dev            # 开发模式：Vite HMR + Electron
 pnpm build          # 构建 out/main、out/preload、out/renderer
 pnpm start          # 构建并以生产模式启动
 pnpm package        # 用 electron-builder 打包（--dir 产物在 apps/desktop/release）
+pnpm dist:win       # 生成 Windows 安装器 AppHub-Setup-*.exe 与免安装 zip（x64）
 pnpm test           # 全部单元/集成测试（离线，进程内模拟 FTP/nginx/S3）
 pnpm typecheck      # 所有包 TypeScript 严格检查
 pnpm verify         # 一键验收：全部 test + typecheck + desktop build
@@ -96,6 +100,18 @@ pnpm demo           # 无需 GUI 的全链路演示：FTP+nginx 频道 + 本机 
 ```
 
 > 开发/测试环境使用 `APPHUB_USER_DATA_DIR` 可整体隔离 Electron userData 与 AppHub 数据（便于多实例与 E2E）；`APPHUB_DATA_DIR` 只隔离 AppHub 数据目录、不影响 Electron 缓存。
+
+## 下载安装（Windows）
+
+从 [GitHub Releases](https://github.com/Gemini2015/AppHub/releases/latest) 下载：
+
+| 资产 | 说明 |
+| --- | --- |
+| `AppHub-Setup-<版本>.exe` | NSIS 安装器（x64）；可选择安装目录，安装后创建开始菜单/桌面快捷方式和卸载项 |
+| `AppHub-<版本>-win-x64.zip` | 免安装版；解压到任意目录后运行 `AppHub.exe` |
+| `SHA256SUMS.txt` | 上述产物的 SHA-256 校验值 |
+
+系统要求：Windows 10/11 x64。安装版与免安装版使用同一个 AppHub 数据目录（默认 `<Electron userData>/AppHubData`）。
 
 ## 验收结果（本机实测，2026-10-27，含本机 Host 与数据目录设置）
 
@@ -107,6 +123,7 @@ pnpm demo           # 无需 GUI 的全链路演示：FTP+nginx 频道 + 本机 
 | `@apphub/core` 覆盖率（v8，含 HostServer） | statements 85.9% / branches 77.4% / functions 92.3% |
 | `pnpm demo`（真实进程内 FTP + 静态 HTTP + 本机 Host） | ftp+nginx 全链路 + **local-host 创建→发布→启动 Host→订阅安装→停止/重启验证** 全部通过 |
 | `pnpm package`（electron-builder --dir） | `apps/desktop/release/win-unpacked/AppHub.exe` 生成成功 |
+| `pnpm dist:win`（NSIS 安装器 + zip） | `AppHub-Setup-0.1.0.exe`（约 94 MB）、`AppHub-0.1.0-win-x64.zip`（约 134 MB）生成成功，zip 内含 `AppHub.exe` |
 | 环境 | Windows / Node 22.23 / pnpm 11.22 / Electron 38.8 / 完全离线 |
 
 > 测试分层、需求覆盖矩阵（R1–R69）、手工验收清单（M1–M34，需要真实 ftp+nginx/MinIO/两台设备局域网/三平台实机/数据目录真实迁移）与 CI 配置见 [docs/TESTING.md](./docs/TESTING.md)。
@@ -223,7 +240,20 @@ pnpm test:e2e                 # Electron E2E（需先 build）
 
 测试完全离线：集成测试在进程内启动 FTP 服务器（ftp-srv）、静态 HTTP 服务器、S3 服务器（s3rver），真实地走存储协议，不依赖外网或真实服务器。测试策略与手工验收清单见 [docs/TESTING.md](./docs/TESTING.md)。
 
-CI：GitHub Actions（Windows + Linux/xvfb）配置在 [`.github/workflows/verify.yml`](.github/workflows/verify.yml)，执行 `pnpm verify:e2e` 并上传 E2E 报告。
+CI：GitHub Actions（Windows + Linux/xvfb）配置在 [`.github/workflows/verify.yml`](.github/workflows/verify.yml)，执行 `pnpm verify:e2e` 并上传 E2E 报告。自动发布配置在 [`.github/workflows/release.yml`](.github/workflows/release.yml)：推送 `v*` 标签后自动验证、打包并创建 GitHub Release。
+
+### 发布新版本
+
+1. 同步根 `package.json` 与 `apps/desktop/package.json` 的 `version`（例如 `0.1.1`）；
+2. 提交后打标签并推送：
+
+```bash
+git commit -am "chore: release v0.1.1"
+git tag v0.1.1
+git push origin master v0.1.1
+```
+
+`release.yml` 会校验标签与版本号一致（`v<version>`），执行 `pnpm verify:e2e`、`pnpm dist:win`，并把 `AppHub-Setup-<version>.exe`、`AppHub-<version>-win-x64.zip`、`SHA256SUMS.txt` 上传到 GitHub Release。也可以手动触发 `release` workflow 做构建试跑（只上传 Actions artifact，不发布 Release）。
 
 应用图标由 `scripts/generate-icons.py` 生成（Pillow），产物（`icon.png` / `icon.ico` / `icon.icns`）位于 `apps/desktop/build/`，electron-builder 打包时自动使用。
 
@@ -246,7 +276,7 @@ AppHub/
 ├── tests/          跨包集成测试
 ├── docs/           架构/协议/存储/测试文档
 ├── scripts/        demo / 图标生成 / 一键验收脚本
-├── .github/workflows/ CI（Windows + Linux xvfb，pnpm verify:e2e）
+├── .github/workflows/ CI（verify）与自动发布（release）
 └── LICENSE         MIT
 ```
 

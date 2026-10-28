@@ -633,6 +633,31 @@ jobs:
 - 若 CI 环境预置了 `ELECTRON_RUN_AS_NODE`，verify.mjs / E2E helper 会自动清理；
 - macOS runner 可跑同一套命令（`pnpm verify:e2e`，无需 xvfb）。
 
+### 10.2 自动发布（release workflow）
+
+仓库另提交了 [`.github/workflows/release.yml`](../.github/workflows/release.yml)：
+
+| 项 | 说明 |
+| --- | --- |
+| 触发 | push tag `v*`；手动 `workflow_dispatch`（只构建、不发布） |
+| runner | `windows-latest`，Node 22 + pnpm（packageManager 决定版本） |
+| 前置校验 | tag 必须等于 `v` + 根 `package.json` version，且根与 `apps/desktop` 版本一致，否则 job 直接失败 |
+| 验证 | `pnpm verify:e2e`（完整 14 步，含真实 Electron E2E） |
+| 打包 | `pnpm dist:win` → `AppHub-Setup-<version>.exe` + `AppHub-<version>-win-x64.zip` |
+| 产物校验 | 安装器/zip 存在且非空；zip 内必须包含 `AppHub.exe`；生成 `SHA256SUMS.txt` |
+| Actions artifact | `apphub-windows-<sha>`，保留 14 天（dispatch 也可下载） |
+| Release | `gh release create --generate-notes`；已存在同名 Release 时 `gh release upload --clobber`；tag 含 `-` 自动 `--prerelease` |
+| 权限 | workflow 声明 `contents: write`；仓库 Actions 设置需允许 read/write |
+
+**发布验收（自动化 + 手工）**
+
+- 自动化：tag 触发后 release job 全绿、Release 资产可下载、`SHA256SUMS.txt` 与资产对应；
+- 版本不匹配（tag ≠ package version）时必须在构建前失败，且不创建 Release；
+- 同一 tag 重跑应补传资产而不是失败；
+- 手工：M35 从 Release 下载安装器/zip，安装到自定义目录、启动、卸载/解压启动。
+
+本地等价命令：`pnpm dist:win`（生成安装器与 zip，输出到 `apps/desktop/release/`）。
+
 ---
 
 ## 11. 手工测试清单（L4）
@@ -653,7 +678,7 @@ jobs:
 
 | ID | 场景 | 预期 |
 | --- | --- | --- |
-| M5 | Windows 10/11：`pnpm dev`、`pnpm start`、`pnpm package`（NSIS/portable） | 窗口正常、中文界面无乱码、安装包可安装启动 |
+| M5 | Windows 10/11：`pnpm dev`、`pnpm start`、`pnpm dist:win`（NSIS/zip） | 窗口正常、中文界面无乱码、安装包可安装启动 |
 | M6 | Linux（桌面环境）：dev/build/package(AppImage) | 正常启动；safeStorage 走系统 keyring（失败时降级 `plain:v1:` 并 warn）；POSIX 可执行位设置 |
 | M7 | macOS：dev/build/package(dmg) | 正常启动；Keychain 加密 channel_pri；Gatekeeper 提示可接受 |
 | M8 | 多实例/数据目录：设置 `APPHUB_USER_DATA_DIR` | 两实例互不干扰；单实例锁行为符合预期 |
@@ -703,6 +728,7 @@ jobs:
 | M32 | 旧版真实用户升级迁移 | 用 Phase 6（或更早）版本在真实 userData 根产生数据（频道/本地库/加密配置），再用 Phase 7 启动 | 启动日志出现「已将旧版数据目录迁移到 AppHubData」；数据整体 move 到 `<userData>/AppHubData`；频道/本地库/私密频道可用；userData 根不再有 channels.json/channels/secrets/library；Chromium `Local State` 等仍在根；tmp/logs 不迁移 |
 | M33 | 两个环境变量同时设置 | 同时设置 `APPHUB_DATA_DIR=E` 与 `APPHUB_USER_DATA_DIR=U` 启动，观察 `system.info` 与设置页 | 优先级：`APPHUB_DATA_DIR` 胜出（dataDir=E，source=env，editable=false）；Electron userData 仍为 U；设置页 env hint 同时展示两个变量说明；修改数据目录按钮 disabled |
 | M34 | 迁移失败 / 只读磁盘回退 | 旧版数据在只读目录/权限不足、或迁移中途目标不可写；以及旧版迁移时 AppHubData 已有数据 | 迁移失败时本次启动回退旧目录（数据仍可用）并记录可读错误，下次启动重试；目标已有数据时跳过迁移不覆盖；不产生半迁移数据（move 回滚） |
+| M35 | GitHub Release 安装包验收（Phase 8 CI/CD） | 从 GitHub Releases 下载 `AppHub-Setup-<version>.exe` 与 `AppHub-<version>-win-x64.zip`；安装器选择自定义目录安装并启动；卸载后检查残留；zip 解压后运行 `AppHub.exe` | 版本号与 tag 一致；安装器创建快捷方式/卸载项、可启动；卸载后程序目录/快捷方式移除；zip 解压即用；`SHA256SUMS.txt` 校验一致；**不要求代码签名/SmartScreen 处理** |
 
 > 说明：旧版自动迁移本身已有 E2E（`settings-data-dir.spec.ts > 旧版数据自动迁移`），
 > M32 面向真实历史用户数据（含 secrets/library/Chromium 共存、大数据量）的人工升级验证；

@@ -11,6 +11,7 @@
     "build": "node scripts/build.mjs",
     "start": "node scripts/start.mjs",
     "package": "node scripts/package.mjs",
+    "dist:win": "node scripts/package.mjs --win nsis zip --publish never",
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
@@ -59,9 +60,29 @@
     "win": {
       "icon": "build/icon.ico",
       "target": [
-        "nsis",
-        "portable"
-      ]
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "AppHub-${version}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AppHub",
+      "artifactName": "AppHub-Setup-${version}.${ext}"
     },
     "linux": {
       "icon": "build/icon.png",

@@ -1,0 +1,127 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows release
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 版本一致性校验：tag 必须等于 v + package.json version，
+      # 且根包与 desktop 包版本一致，避免发布错版本。
+      - name: Validate release tag and versions
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $rootVersion = node -p "require('./package.json').version"
+          $appVersion = node -p "require('./apps/desktop/package.json').version"
+          if ($rootVersion -ne $appVersion) {
+            throw "根 package.json ($rootVersion) 与 apps/desktop/package.json ($appVersion) 版本不一致"
+          }
+          if ($tag -ne "v$rootVersion") {
+            throw "tag $tag 与 package.json 版本 v$rootVersion 不一致"
+          }
+          Write-Host "版本校验通过：$tag"
+
+      # 发布前跑完整验证（测试 + typecheck + build + 真实 Electron E2E）
+      - name: Verify (tests + typecheck + build + e2e)
+        run: pnpm verify:e2e
+
+      - name: Build Windows installer and zip
+        run: pnpm dist:win
+
+      - name: Verify release artifacts
+        shell: pwsh
+        run: |
+          $release = "apps/desktop/release"
+          $installer = Get-ChildItem -Path $release -Filter "AppHub-Setup-*.exe" -File | Select-Object -First 1
+          $zip = Get-ChildItem -Path $release -Filter "AppHub-*-win-x64.zip" -File | Select-Object -First 1
+          if (-not $installer) { throw "未生成 NSIS 安装器（AppHub-Setup-*.exe）" }
+          if (-not $zip) { throw "未生成 zip（AppHub-*-win-x64.zip）" }
+          if ($installer.Length -lt 20MB) { throw "安装器过小：$($installer.Length) bytes" }
+          if ($zip.Length -lt 20MB) { throw "zip 过小：$($zip.Length) bytes" }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
+          try {
+            $entryNames = @($archive.Entries | ForEach-Object { $_.FullName })
+          } finally {
+            $archive.Dispose()
+          }
+          if (-not ($entryNames -contains "AppHub.exe") -and -not ($entryNames -contains "AppHub/AppHub.exe")) {
+            throw "zip 中未找到 AppHub.exe；实际条目示例：$($entryNames | Select-Object -First 5)"
+          }
+
+          $assets = @($installer.FullName, $zip.FullName)
+          $checksumFile = Join-Path $release "SHA256SUMS.txt"
+          $lines = foreach ($asset in $assets) {
+            $hash = (Get-FileHash -Path $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $(Split-Path $asset -Leaf)"
+          }
+          $lines | Set-Content -Path $checksumFile -Encoding ascii
+
+          Write-Host "产物校验通过："
+          Get-ChildItem -Path $release -File |
+            Where-Object { $_.Extension -in '.exe', '.zip', '.txt' } |
+            ForEach-Object { Write-Host ("  {0} ({1:N1} MB)" -f $_.Name, ($_.Length / 1MB)) }
+
+      # 手动 dispatch 也可下载产物；tag 发布时用于 GitHub Release 资产。
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: apphub-windows-${{ github.sha }}
+          path: |
+            apps/desktop/release/AppHub-Setup-*.exe
+            apps/desktop/release/AppHub-*-win-x64.zip
+            apps/desktop/release/SHA256SUMS.txt
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          assets=(
+            apps/desktop/release/AppHub-Setup-*.exe
+            apps/desktop/release/AppHub-*-win-x64.zip
+            apps/desktop/release/SHA256SUMS.txt
+          )
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            args=(release create "$tag" --title "AppHub $tag" --generate-notes)
+            if [[ "$tag" == *-* ]]; then
+              args+=(--prerelease)
+            fi
+            gh "${args[@]}" "${assets[@]}"
+          fi

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
- * 打包脚本：完整构建后调用 electron-builder --dir。
+ * 打包脚本：完整构建后调用 electron-builder。
  *
- * 说明：
- *  - 使用 `--dir` 只产出可运行目录（Windows: release/win-unpacked），不制作安装器，
- *    避免下载 NSIS/WiX 等耗时工具；需要安装器时手动执行 `pnpm exec electron-builder`。
- *  - electron-builder 离线环境下若缺少 electron 缓存会失败，这里给出可读错误。
+ * 默认（无额外参数）使用 `--dir` 只产出可运行目录（Windows: release/win-unpacked），
+ * 不制作安装器，避免下载 NSIS 等耗时工具；新增的 `pnpm dist:win` 会透传
+ * `--win nsis zip --publish never`，产出安装器与免安装 zip。
+ *
+ * electron-builder 离线环境下若缺少 electron 缓存会失败，这里给出可读错误。
  */
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -29,8 +30,13 @@ async function main() {
   for (const line of sizes) console.log(`  - ${line}`);
 
   const binPath = await resolveElectronBuilderBin();
-  const args = [binPath, '--dir', ...process.argv.slice(2)];
-  console.log(`[package] electron-builder --dir（输出目录：${path.join(desktopRoot, 'release')}）`);
+  // 无参数时保持旧的 `--dir` 行为；`pnpm dist:win` 会透传 --win nsis zip 等参数。
+  const passthrough = process.argv.slice(2);
+  const builderArgs = passthrough.length > 0 ? passthrough : ['--dir'];
+  const args = [binPath, ...builderArgs];
+  console.log(
+    `[package] electron-builder ${builderArgs.join(' ')}（输出目录：${path.join(desktopRoot, 'release')}）`,
+  );
 
   await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, { cwd: desktopRoot, stdio: 'inherit', env: process.env });
@@ -41,7 +47,7 @@ async function main() {
         reject(
           new Error(
             `electron-builder 退出码 ${code}。常见原因：\n` +
-              '  - 离线环境缺少 electron 下载缓存（设置 ELECTRON_MIRROR / 预置缓存后重试）；\n' +
+              '  - 离线环境缺少 electron 缓存（设置 ELECTRON_MIRROR / 预置缓存后重试）；\n' +
               '  - 目标平台工具链缺失（Windows 打包 NSIS 需下载 nsis 工具）；\n' +
               '  - 可先用 `pnpm --filter @apphub/desktop build` 验证构建。',
           ),

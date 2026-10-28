@@ -12,6 +12,7 @@
     "start": "pnpm --filter @apphub/desktop start",
     "build": "pnpm --filter @apphub/desktop build",
     "package": "pnpm --filter @apphub/desktop package",
+    "dist:win": "pnpm --filter @apphub/desktop dist:win",
     "test": "pnpm -r --no-bail run test",
     "test:e2e": "pnpm --filter @apphub/desktop test:e2e",
     "typecheck": "pnpm -r --no-bail run typecheck",
