@@ -819,7 +819,8 @@ env/default/custom 断言按 AppHubData 新语义更新）；desktop 单测由 2
 | 触发 | `workflow_dispatch`（master `faf8ead`） |
 | 结果 | ✅ Success，5m57s（Windows release job） |
 | 产物 | Actions artifact `apphub-windows-faf8ead…`，228 MB（包含 `AppHub-Setup-0.1.0.exe`、`AppHub-0.1.0-win-x64.zip`、`SHA256SUMS.txt`） |
-| Release | 按设计**未创建**（dispatch 仅构建）；正式发布由 `v0.1.0` tag 触发，待执行 |
+| Release（dispatch） | 按设计**未创建**（dispatch 仅构建） |
+| 正式发布（tag `v0.1.0`，run 40619954907） | ✅ Success，5m29s；[GitHub Release v0.1.0](https://github.com/Gemini2015/AppHub/releases/tag/v0.1.0) 已发布 3 个资产：`AppHub-Setup-0.1.0.exe`（94.2 MB）、`AppHub-0.1.0-win-x64.zip`（133.9 MB）、`SHA256SUMS.txt`（0.1 MB）；`SHA256SUMS.txt` 与 Release asset digest 逐项一致 |
 | 本地等价验证 | `pnpm package`（--dir）通过；`pnpm dist:win` 产出安装器/zip 并通过 zip 内 `AppHub.exe`、大小与 SHA-256 校验 |
 
 ---
