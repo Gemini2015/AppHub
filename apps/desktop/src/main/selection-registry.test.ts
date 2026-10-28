@@ -11,10 +11,12 @@ const coreMock = vi.hoisted(() => ({ inspectZipArchive: vi.fn() }));
 vi.mock('@apphub/core', () => ({ inspectZipArchive: coreMock.inspectZipArchive }));
 vi.mock('electron', () => ({ dialog: { showOpenDialog: vi.fn() } }));
 
+import type { OpenDialogOptions } from 'electron';
 import type { SelectionRegistryOptions } from './selection-registry';
 import {
   SELECTION_LIMITS,
   SelectionRegistry,
+  createE2ESelectionDialog,
   normalizeZipInspection,
   suggestEntry,
 } from './selection-registry';
@@ -291,5 +293,111 @@ describe('selection-registry：建议入口与 zip 结构校验', () => {
   it('SELECTION_LIMITS 与契约一致（2 万文件 / 2GiB 单文件）', () => {
     expect(SELECTION_LIMITS.maxFiles).toBe(20_000);
     expect(SELECTION_LIMITS.maxFileSize).toBe(2 * 1024 * 1024 * 1024);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E2E 文件选择注入（APPHUB_E2E=1）
+// ---------------------------------------------------------------------------
+
+describe('selection-registry：E2E 文件选择注入', () => {
+  const folderOptions = { properties: ['openDirectory'] } as OpenDialogOptions;
+  const zipOptions = {
+    properties: ['openFile'],
+    filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }],
+  } as OpenDialogOptions;
+  const filesOptions = { properties: ['openFile', 'multiSelections'] } as OpenDialogOptions;
+
+  it('非 E2E 环境（未设置/不为 1）返回 null，生产行为不变', () => {
+    expect(createE2ESelectionDialog({})).toBeNull();
+    expect(createE2ESelectionDialog({ APPHUB_E2E: '0' })).toBeNull();
+    expect(createE2ESelectionDialog({ APPHUB_E2E: 'true' })).toBeNull();
+  });
+
+  it('E2E + folder 选择使用 APPHUB_E2E_PICK_FOLDER', async () => {
+    const dialog = createE2ESelectionDialog({
+      APPHUB_E2E: '1',
+      APPHUB_E2E_PICK_FOLDER: tempDir,
+    });
+    expect(dialog).not.toBeNull();
+    await expect(dialog!.showOpenDialog(folderOptions)).resolves.toEqual({
+      canceled: false,
+      filePaths: [tempDir],
+    });
+  });
+
+  it('E2E + zip 选择使用 APPHUB_E2E_PICK_ZIP（扩展名大小写不敏感）', async () => {
+    const zipPath = path.join(tempDir, 'bundle.zip');
+    const dialog = createE2ESelectionDialog({
+      APPHUB_E2E: '1',
+      APPHUB_E2E_PICK_ZIP: zipPath,
+    });
+    await expect(dialog!.showOpenDialog(zipOptions)).resolves.toEqual({
+      canceled: false,
+      filePaths: [zipPath],
+    });
+    await expect(
+      dialog!.showOpenDialog({
+        properties: ['openFile'],
+        filters: [{ name: 'ZIP', extensions: ['ZIP'] }],
+      } as OpenDialogOptions),
+    ).resolves.toEqual({ canceled: false, filePaths: [zipPath] });
+  });
+
+  it('E2E + files 选择支持 JSON 数组与 path.delimiter 两种格式', async () => {
+    const first = path.join(tempDir, 'app.exe');
+    const second = path.join(tempDir, 'readme.txt');
+
+    const jsonDialog = createE2ESelectionDialog({
+      APPHUB_E2E: '1',
+      APPHUB_E2E_PICK_FILES: JSON.stringify([first, second]),
+    });
+    await expect(jsonDialog!.showOpenDialog(filesOptions)).resolves.toEqual({
+      canceled: false,
+      filePaths: [first, second],
+    });
+
+    const delimitedDialog = createE2ESelectionDialog({
+      APPHUB_E2E: '1',
+      APPHUB_E2E_PICK_FILES: [first, second].join(path.delimiter),
+    });
+    await expect(delimitedDialog!.showOpenDialog(filesOptions)).resolves.toEqual({
+      canceled: false,
+      filePaths: [first, second],
+    });
+  });
+
+  it('缺少匹配 env 时返回 canceled，绝不回退真实原生对话框', async () => {
+    const dialog = createE2ESelectionDialog({ APPHUB_E2E: '1' });
+    expect(dialog).not.toBeNull();
+    await expect(dialog!.showOpenDialog(folderOptions)).resolves.toEqual({ canceled: true });
+    await expect(dialog!.showOpenDialog(zipOptions)).resolves.toEqual({ canceled: true });
+    await expect(dialog!.showOpenDialog(filesOptions)).resolves.toEqual({ canceled: true });
+
+    // 空白值同样视为缺失
+    const blankDialog = createE2ESelectionDialog({
+      APPHUB_E2E: '1',
+      APPHUB_E2E_PICK_FOLDER: '   ',
+      APPHUB_E2E_PICK_ZIP: '',
+      APPHUB_E2E_PICK_FILES: '[]',
+    });
+    await expect(blankDialog!.showOpenDialog(folderOptions)).resolves.toEqual({ canceled: true });
+    await expect(blankDialog!.showOpenDialog(zipOptions)).resolves.toEqual({ canceled: true });
+    await expect(blankDialog!.showOpenDialog(filesOptions)).resolves.toEqual({ canceled: true });
+  });
+
+  it('注入后 SelectionRegistry.pick 可正常走 folder 选择（后续真实校验不变）', async () => {
+    const folder = path.join(tempDir, 'picked-folder');
+    await mkdir(folder, { recursive: true });
+    await writeFile(path.join(folder, 'app.exe'), 'MZ');
+    const dialog = createE2ESelectionDialog({
+      APPHUB_E2E: '1',
+      APPHUB_E2E_PICK_FOLDER: folder,
+    });
+    const registry = makeRegistry({ dialog: dialog ?? undefined });
+    const selection = await registry.pick('folder');
+    expect(selection).not.toBeNull();
+    expect(selection?.kind).toBe('folder');
+    expect(selection?.files.map((file) => file.relativePath)).toEqual(['app.exe']);
   });
 });

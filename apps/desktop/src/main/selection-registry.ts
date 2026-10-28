@@ -127,6 +127,74 @@ function dialogOptionsFor(kind: PickKind): OpenDialogOptions {
   }
 }
 
+// ---------------------------------------------------------------------------
+// E2E 文件选择注入（测试专用；生产环境返回 null，行为完全不变）
+// ---------------------------------------------------------------------------
+
+const E2E_PICK_ENV = {
+  folder: 'APPHUB_E2E_PICK_FOLDER',
+  zip: 'APPHUB_E2E_PICK_ZIP',
+  files: 'APPHUB_E2E_PICK_FILES',
+} as const;
+
+function hasZipFilter(options: OpenDialogOptions): boolean {
+  return (options.filters ?? []).some((filter) =>
+    (filter.extensions ?? []).some((extension) => extension.replace(/^\./, '').toLowerCase() === 'zip'),
+  );
+}
+
+function readSinglePathEnv(env: NodeJS.ProcessEnv, key: string): string | null {
+  const raw = env[key]?.trim();
+  return raw && raw.length > 0 ? raw : null;
+}
+
+/** 解析 APPHUB_E2E_PICK_FILES：优先 JSON 字符串数组，其次 path.delimiter 分隔。 */
+function readFilesEnv(env: NodeJS.ProcessEnv): string[] | null {
+  const raw = env[E2E_PICK_ENV.files]?.trim();
+  if (!raw) return null;
+  let candidates: string[];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    candidates = parsed.filter((value): value is string => typeof value === 'string');
+  } catch {
+    candidates = raw.split(path.delimiter);
+  }
+  const filePaths = candidates.map((value) => value.trim()).filter((value) => value.length > 0);
+  return filePaths.length > 0 ? filePaths : null;
+}
+
+/**
+ * E2E 测试钩子：当 `APPHUB_E2E === '1'` 时返回伪造的文件选择对话框，让 Playwright
+ * 能驱动“发布/选择文件/文件夹/zip”流程（原生对话框无法自动化）。
+ *
+ * 约定（对应 env 缺失即返回 canceled，**绝不回退真实 native dialog**，避免 E2E 卡死）：
+ *  - `properties` 含 `openDirectory` → APPHUB_E2E_PICK_FOLDER（绝对目录）
+ *  - `filters` 含 zip 扩展名 → APPHUB_E2E_PICK_ZIP（zip 路径）
+ *  - 其余（files）→ APPHUB_E2E_PICK_FILES（JSON 数组字符串；也兼容 path.delimiter 分隔）
+ *
+ * 非 E2E 环境返回 null；index.ts 只在非 null 时注入，生产路径完全不变。
+ */
+export function createE2ESelectionDialog(
+  env: NodeJS.ProcessEnv = process.env,
+): SelectionDialogLike | null {
+  if (env.APPHUB_E2E !== '1') return null;
+  return {
+    async showOpenDialog(options: OpenDialogOptions): Promise<SelectionDialogResult> {
+      if ((options.properties ?? []).includes('openDirectory')) {
+        const folder = readSinglePathEnv(env, E2E_PICK_ENV.folder);
+        return folder ? { canceled: false, filePaths: [folder] } : { canceled: true };
+      }
+      if (hasZipFilter(options)) {
+        const zip = readSinglePathEnv(env, E2E_PICK_ENV.zip);
+        return zip ? { canceled: false, filePaths: [zip] } : { canceled: true };
+      }
+      const files = readFilesEnv(env);
+      return files ? { canceled: false, filePaths: files } : { canceled: true };
+    },
+  };
+}
+
 function isInside(parent: string, child: string): boolean {
   const relative = path.relative(path.resolve(parent), path.resolve(child));
   return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);

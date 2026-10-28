@@ -255,7 +255,13 @@ export function AppDetailView({ channelId, appId, dataVersion, onBack, onLibrary
               </>
             )}
             {canPublish ? (
-              <button type="button" className="btn btn-secondary" onClick={() => setPublishOpen(true)} disabled={busy}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                data-testid="publish-new-version-button"
+                onClick={() => setPublishOpen(true)}
+                disabled={busy}
+              >
                 <Icon name="publish" size={16} />
                 发布新版本
               </button>

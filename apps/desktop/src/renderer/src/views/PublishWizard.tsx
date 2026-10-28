@@ -418,6 +418,7 @@ export function PublishWizard({ channelId, channelName, app, onClose, onPublishe
               ) : (
                 <TextField
                   label="App 标识（可选）"
+                  testId="publish-app-id"
                   value={appIdInput}
                   onChange={setAppIdInput}
                   placeholder="例如 foobar（留空自动生成）"
@@ -583,6 +584,7 @@ export function PublishWizard({ channelId, channelName, app, onClose, onPublishe
                     <button
                       type="button"
                       className="btn btn-secondary"
+                      data-testid="publish-pick-files"
                       onClick={() => void pick('files')}
                       disabled={picking !== null || publishing}
                     >
@@ -592,6 +594,7 @@ export function PublishWizard({ channelId, channelName, app, onClose, onPublishe
                     <button
                       type="button"
                       className="btn btn-secondary"
+                      data-testid="publish-pick-folder"
                       onClick={() => void pick('folder')}
                       disabled={picking !== null || publishing}
                     >
@@ -604,6 +607,7 @@ export function PublishWizard({ channelId, channelName, app, onClose, onPublishe
                     <button
                       type="button"
                       className="btn btn-secondary"
+                      data-testid="publish-pick-zip"
                       onClick={() => void pick('zip')}
                       disabled={picking !== null || publishing}
                     >
@@ -613,6 +617,7 @@ export function PublishWizard({ channelId, channelName, app, onClose, onPublishe
                     <button
                       type="button"
                       className="btn btn-secondary"
+                      data-testid="publish-pick-folder"
                       onClick={() => void pick('folder')}
                       disabled={picking !== null || publishing}
                     >

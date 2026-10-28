@@ -18,7 +18,7 @@ import type { IpcSenderLike } from './ipc';
 import { createLogger } from './logger';
 import type { AppHubLogger } from './logger';
 import { createSecretBox } from './secret-box';
-import { SelectionRegistry } from './selection-registry';
+import { createE2ESelectionDialog, SelectionRegistry } from './selection-registry';
 import { createSenderPolicy } from './sender';
 import type { SenderPolicy } from './sender';
 import { createMainWindow } from './window';
@@ -203,7 +203,12 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
-  selectionRegistry = new SelectionRegistry({ logger });
+  // E2E 测试钩子：仅 APPHUB_E2E=1 时注入伪造文件选择对话框，生产环境返回 null、行为不变。
+  const e2eSelectionDialog = createE2ESelectionDialog(process.env);
+  selectionRegistry = new SelectionRegistry({
+    logger,
+    ...(e2eSelectionDialog ? { dialog: e2eSelectionDialog } : {}),
+  });
 
   const appRoot = path.join(__dirname, '..');
   const preloadFile = path.join(appRoot, 'preload', 'index.cjs');

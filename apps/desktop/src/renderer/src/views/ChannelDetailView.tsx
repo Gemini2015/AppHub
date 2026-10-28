@@ -213,6 +213,7 @@ export function ChannelDetailView({
             <button
               type="button"
               className="btn btn-secondary"
+              data-testid="channel-refresh-button"
               onClick={() => void refreshChannel()}
               disabled={busy}
             >

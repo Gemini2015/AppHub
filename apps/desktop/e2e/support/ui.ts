@@ -66,12 +66,19 @@ export const TESTID = {
   libraryCheckUpdates: 'library-check-updates',
 
   publishOpenButton: 'publish-open-button',
+  publishNewVersionButton: 'publish-new-version-button',
   publishWizard: 'publish-wizard',
+  publishAppId: 'publish-app-id',
   publishDisplayName: 'publish-display-name',
   publishVersion: 'publish-version',
   publishEntry: 'publish-entry',
   publishNext: 'publish-next',
   publishSubmit: 'publish-submit',
+  publishPickFiles: 'publish-pick-files',
+  publishPickFolder: 'publish-pick-folder',
+  publishPickZip: 'publish-pick-zip',
+
+  channelRefreshButton: 'channel-refresh-button',
 
   // 设置页：数据目录（Phase 6/7）
   dataDirSource: 'data-dir-source',

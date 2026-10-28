@@ -44,7 +44,7 @@ async function fillStep1(
 }
 
 async function pickFiles(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole('button', { name: /^选择文件$/ }));
+  await user.click(screen.getByTestId('publish-pick-files'));
   await waitFor(() =>
     expect(screen.getByLabelText(/启动入口（从已选文件中选择）/)).toBeInTheDocument(),
   );
@@ -56,6 +56,7 @@ describe('发布向导', () => {
     const { onPublished } = renderWizard(api);
     const user = userEvent.setup();
 
+    expect(screen.getByTestId('publish-app-id')).toBeInTheDocument();
     await user.click(screen.getByTestId('publish-next'));
     expect(await screen.findByText('请输入 App 名称')).toBeInTheDocument();
     expect(screen.getByTestId('publish-version')).toBeInTheDocument();
@@ -137,10 +138,12 @@ describe('发布向导', () => {
     await user.click(screen.getByRole('button', { name: /压缩包（zip）/ }));
     await fillStep1(user, { displayName: 'ZipApp', version: '2.0.0' });
 
-    await user.click(screen.getByRole('button', { name: /选择压缩包/ }));
+    await user.click(screen.getByTestId('publish-pick-zip'));
     await waitFor(() => expect(api.publish.pick).toHaveBeenCalledWith('zip'));
     expect(await screen.findByText(/foobar\.zip/)).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'foobar.exe' })).toBeInTheDocument();
+    // zip 模式下「选择文件夹并自动打包」复用 publish-pick-folder。
+    expect(screen.getByTestId('publish-pick-folder')).toBeInTheDocument();
   });
 
   it('版本已存在时必须勾选覆盖确认，发布请求携带 overwrite=true', async () => {

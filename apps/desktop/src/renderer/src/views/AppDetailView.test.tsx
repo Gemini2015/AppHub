@@ -132,7 +132,7 @@ describe('App 详情', () => {
     const user = userEvent.setup();
     const { unmount } = renderAppDetail(api);
     await screen.findByTestId('app-detail');
-    const publishButton = screen.getByRole('button', { name: /发布新版本/ });
+    const publishButton = screen.getByTestId('publish-new-version-button');
     expect(publishButton).toBeInTheDocument();
 
     await user.click(publishButton);
@@ -150,7 +150,7 @@ describe('App 详情', () => {
     renderAppDetail(subscriberApi);
     await screen.findByTestId('app-detail');
     await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /发布新版本/ })).not.toBeInTheDocument(),
+      expect(screen.queryByTestId('publish-new-version-button')).not.toBeInTheDocument(),
     );
   });
 });

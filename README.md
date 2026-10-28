@@ -117,10 +117,10 @@ pnpm demo           # 无需 GUI 的全链路演示：FTP+nginx 频道 + 本机 
 
 | 项目 | 结果 |
 | --- | --- |
-| `pnpm verify:e2e`（6 包 test + 6 包 typecheck + build + E2E） | **14/14 步通过，PASS（近期 ~78–97s）** |
-| Vitest 单元/集成测试 | **507 个用例，0 skipped**（protocol 27 / storage 56 / core 118 / 集成 39 / desktop 267） |
-| Electron E2E（Playwright + 真实 Electron） | **17/17 通过**（启动、订阅→安装→校验→卸载、错误处理、创建/发布向导、本机 Host 创建/启停/URL 可达/私密能力链接、默认 local-host、端口自动避让、数据目录 env/default/custom 三来源与旧版自动迁移） |
-| `@apphub/core` 覆盖率（v8，含 HostServer） | statements 85.9% / branches 77.4% / functions 92.3% |
+| `pnpm verify:e2e`（6 包 test + 6 包 typecheck + build + E2E） | **14/14 步通过，PASS（近期 ~90–143s）** |
+| Vitest 单元/集成测试 | **518 个用例，0 skipped**（protocol 27 / storage 56 / core 123 / 集成 39 / desktop 273） |
+| Electron E2E（Playwright + 真实 Electron） | **18/18 通过**（启动、订阅→安装→校验→卸载、错误处理、创建/发布向导、本机 Host 创建/启停/URL 可达/私密能力链接、默认 local-host、端口自动避让、数据目录三来源/旧版迁移、**双实例发布→订阅→下载安装→更新**） |
+| `@apphub/core` 覆盖率（v8，含 HostServer） | statements 85.9% / branches 77.8% / functions 92.1% |
 | `pnpm demo`（真实进程内 FTP + 静态 HTTP + 本机 Host） | ftp+nginx 全链路 + **local-host 创建→发布→启动 Host→订阅安装→停止/重启验证** 全部通过 |
 | `pnpm package`（electron-builder --dir） | `apps/desktop/release/win-unpacked/AppHub.exe` 生成成功 |
 | `pnpm dist:win`（NSIS 安装器 + zip） | `AppHub-Setup-0.1.0.exe`（约 94 MB）、`AppHub-0.1.0-win-x64.zip`（约 134 MB）生成成功，zip 内含 `AppHub.exe` |

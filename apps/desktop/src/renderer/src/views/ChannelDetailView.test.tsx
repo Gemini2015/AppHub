@@ -82,7 +82,7 @@ describe('频道详情', () => {
     renderChannelDetail(api);
 
     await screen.findByTestId('channel-detail');
-    await user.click(screen.getByRole('button', { name: /^刷新$/ }));
+    await user.click(screen.getByTestId('channel-refresh-button'));
 
     await waitFor(() => expect(api.channels.refresh).toHaveBeenCalledWith(CHANNEL_ID));
     expect(await screen.findByText('频道已刷新')).toBeInTheDocument();

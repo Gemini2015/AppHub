@@ -287,13 +287,13 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 
 ## 9. 交付验收清单
 
-- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（507 个 Vitest 用例，0 skipped）；
+- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（518 个 Vitest 用例，0 skipped）；
 - [x] `pnpm build` 产出 `out/`，`pnpm dev` 可启动应用；`pnpm package` 产出 `apps/desktop/release/win-unpacked/AppHub.exe`；
 - [x] 演示脚本 `pnpm demo` 在 FTP+nginx 模拟环境与本机 Host 环境下完成创建/发布/订阅/安装/更新/启停验证；
 - [x] README 的 Quickstart 与截图一致；
-- [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5；Phase 5 本机 Host R48–R59、Phase 6 默认 local-host/端口避让/数据目录 R60–R64、Phase 7 AppHubData 隔离/环境变量/旧版迁移 R65–R69）；
+- [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5；Phase 5 本机 Host R48–R59、Phase 6 默认 local-host/端口避让/数据目录 R60–R64、Phase 7 AppHubData 隔离/环境变量/旧版迁移 R65–R69、Phase 9 双实例真实链路 R70–R74）；
 - [x] docs/PROTOCOL.md、STORAGE.md、TESTING.md 完整；
-- [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 17/17，覆盖本机 Host 启停与 URL 可达、端口避让、数据目录三种来源与旧版自动迁移）。
+- [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 18/18，覆盖本机 Host 启停/URL 可达、端口避让、数据目录、双实例发布→订阅→下载安装→更新）。
 
 ## 10. 构建与发布（CI/CD）
 
