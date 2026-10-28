@@ -273,6 +273,7 @@ function makeHarness(options: {
   reveal?: any;
   dataDirInfo?: IpcRouterContext['dataDirInfo'];
   changeDataDir?: (newPath: string) => Promise<{ previousDataDir: string; newDataDir: string; restarting: boolean }>;
+  updater?: IpcRouterContext['updater'];
 } = {}): Harness {
   const logger = createFakeLogger();
   const core = options.core ?? makeCore();
@@ -322,6 +323,7 @@ function makeHarness(options: {
     reveal: options.reveal,
     dataDirInfo: options.dataDirInfo,
     changeDataDir: options.changeDataDir,
+    updater: options.updater,
   };
   const router = createIpcRouter(ctx) as Harness['router'];
   const event: IpcEventLike = { sender, senderFrame: { url: options.frameUrl ?? TRUSTED_URL } };
@@ -983,6 +985,89 @@ describe('ipc：system.changeDataDir', () => {
     });
     expect(internal).toMatchObject({ ok: false, error: { code: 'INTERNAL' } });
     expect(JSON.stringify(internal)).not.toContain('at ');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// updates（应用内自动更新）
+// ---------------------------------------------------------------------------
+
+describe('ipc：updates', () => {
+  function updateState(overrides: Record<string, unknown> = {}): any {
+    return { supported: true, status: 'idle', currentVersion: '0.1.0', ...overrides };
+  }
+
+  function makeUpdater() {
+    return {
+      getState: vi.fn(() => updateState()),
+      check: vi.fn(async () => updateState({ status: 'checking' })),
+      download: vi.fn(async () => updateState({ status: 'downloaded', progress: { percent: 100 } })),
+      install: vi.fn(async () => undefined),
+      dismiss: vi.fn(() => updateState({ status: 'available', dismissed: true })),
+    };
+  }
+
+  const UPDATE_CHANNELS = [
+    IPC_CHANNELS.updatesState,
+    IPC_CHANNELS.updatesCheck,
+    IPC_CHANNELS.updatesDownload,
+    IPC_CHANNELS.updatesInstall,
+    IPC_CHANNELS.updatesDismiss,
+  ];
+
+  it('未注入 updater 时 5 个 updates API 均返回 UNSUPPORTED', async () => {
+    const harness = makeHarness();
+    for (const channel of UPDATE_CHANNELS) {
+      expect(await call(harness, channel)).toMatchObject({ ok: false, error: { code: 'UNSUPPORTED' } });
+    }
+  });
+
+  it('5 个 handler 调用注入实现并返回 ApiResult', async () => {
+    const updater = makeUpdater();
+    const harness = makeHarness({ updater });
+
+    expect(await call(harness, IPC_CHANNELS.updatesState)).toEqual({ ok: true, value: updateState() });
+    expect(await call(harness, IPC_CHANNELS.updatesCheck)).toMatchObject({ ok: true, value: { status: 'checking' } });
+    expect(await call(harness, IPC_CHANNELS.updatesDownload)).toMatchObject({
+      ok: true,
+      value: { status: 'downloaded' },
+    });
+    expect(await call(harness, IPC_CHANNELS.updatesInstall)).toEqual({ ok: true, value: undefined });
+    expect(await call(harness, IPC_CHANNELS.updatesDismiss)).toMatchObject({ ok: true, value: { dismissed: true } });
+
+    expect(updater.getState).toHaveBeenCalledTimes(1);
+    expect(updater.check).toHaveBeenCalledTimes(1);
+    expect(updater.download).toHaveBeenCalledTimes(1);
+    expect(updater.install).toHaveBeenCalledTimes(1);
+    expect(updater.dismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('更新器抛 AppError 时透传 code；普通异常折叠为 INTERNAL', async () => {
+    const updater = makeUpdater();
+    updater.check.mockRejectedValueOnce(new AppError('STATE', '更新器已释放'));
+    const harness = makeHarness({ updater });
+    expect(await call(harness, IPC_CHANNELS.updatesCheck)).toMatchObject({
+      ok: false,
+      error: { code: 'STATE', message: '更新器已释放' },
+    });
+
+    updater.download.mockRejectedValueOnce(new Error('boom'));
+    const internal = await call(harness, IPC_CHANNELS.updatesDownload);
+    expect(internal).toMatchObject({ ok: false, error: { code: 'INTERNAL' } });
+    expect(JSON.stringify(internal)).not.toContain('at ');
+  });
+
+  it('拒绝多余字段入参（空入参契约）', async () => {
+    const updater = makeUpdater();
+    const harness = makeHarness({ updater });
+    for (const channel of UPDATE_CHANNELS) {
+      expect(await call(harness, channel, { extra: 1 })).toMatchObject({
+        ok: false,
+        error: { code: 'VALIDATION' },
+      });
+    }
+    expect(updater.getState).not.toHaveBeenCalled();
+    expect(updater.check).not.toHaveBeenCalled();
   });
 });
 

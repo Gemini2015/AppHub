@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { act, render, screen, userEvent, waitFor } from '../test/render';
-import { createMockApi, makeHostStatus, makeProgressEvent, makeRunningHostStatus, ok } from '../test/mock-api';
+import { createMockApi, makeAvailableUpdate, makeHostStatus, makeProgressEvent, makeRunningHostStatus, ok } from '../test/mock-api';
 
 describe('App 外壳', () => {
   it('window.apphub 缺失时显示可读错误而不是白屏', () => {
@@ -85,5 +85,22 @@ describe('App 外壳', () => {
     });
 
     await waitFor(() => expect(api.host.list).toHaveBeenCalledTimes(2));
+  });
+
+  it('有可用更新时显示 Banner，点击查看打开更新弹窗', async () => {
+    const api = createMockApi({
+      updates: { state: vi.fn().mockResolvedValue(ok(makeAvailableUpdate())) },
+    });
+    const user = userEvent.setup();
+    render(<App api={api} />);
+
+    const banner = await screen.findByTestId('update-banner');
+    expect(banner).toHaveTextContent('发现新版本 v0.2.0');
+
+    await user.click(screen.getByTestId('update-open-button'));
+    const dialog = await screen.findByTestId('update-dialog');
+    expect(dialog).toHaveTextContent('AppHub v0.2.0');
+    expect(dialog).toHaveTextContent(/添加自动更新/);
+    expect(screen.getByTestId('update-download-button')).toBeInTheDocument();
   });
 });

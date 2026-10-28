@@ -40,9 +40,9 @@ pnpm build && pnpm test:e2e
 | 层 | 名称 | 范围 | 位置 | 运行方式 | 当前状态 |
 | --- | --- | --- | --- | --- | --- |
 | L0 | 协议单元 | zod schema、路径/URL/semver/错误码/序列化 | `packages/protocol/src/*.test.ts` | `pnpm --filter @apphub/protocol test` | ✅ 27 tests |
-| L1 | 包单元 | storage 四个适配器 + 工厂；core 频道/发布/安装/Host 引擎；desktop 主进程 IPC/安全/数据目录；renderer React 组件 | `packages/*/src/**/*.test.ts(x)`、`apps/desktop/src/**/*.test.ts(x)` | `pnpm -r test` / 各包 `pnpm --filter <pkg> test` | ✅ storage 56、core 123、desktop 273 |
+| L1 | 包单元 | storage 四个适配器 + 工厂；core 频道/发布/安装/Host 引擎；desktop 主进程 IPC/安全/数据目录/自动更新；renderer React 组件 | `packages/*/src/**/*.test.ts(x)`、`apps/desktop/src/**/*.test.ts(x)` | `pnpm -r test` / 各包 `pnpm --filter <pkg> test` | ✅ storage 56、core 123、desktop 305 |
 | L2 | 跨包集成 | `core + storage + testkit` 组合，真实存储适配器 + 进程内 FTP/S3/静态服务器；内存存储 + 内存 fetch 快速链路；**本机 Host 真实监听 HTTP**；repair 工具 | `tests/integration/**` | `pnpm --filter @apphub/tests test` | ✅ 39 tests / 11 files |
-| L3 | Electron E2E | 真实启动打包后的 Electron 应用，走完整 UI 链路（本机 Host、默认 local-host、端口避让、数据目录三来源/双 env/旧版迁移、**双实例真实发布→订阅→安装→更新**） | `apps/desktop/e2e/**` | `pnpm build && pnpm test:e2e` | ✅ 18 tests / 8 specs |
+| L3 | Electron E2E | 真实启动打包后的 Electron 应用，走完整 UI 链路（本机 Host、默认 local-host、端口避让、数据目录三来源/双 env/旧版迁移、双实例真实链路、**自动更新 unsupported 态**） | `apps/desktop/e2e/**` | `pnpm build && pnpm test:e2e` | ✅ 19 tests / 8 specs |
 | L4 | 手工验收 | 真实 vsftpd/FileZilla + nginx、MinIO、两台设备局域网访问、三平台 GUI、真实启动外部 App、原生文件对话框 | 本文 §11 清单 | 人工 | ⏳ 发布前逐项执行 |
 
 分层原则：
@@ -162,6 +162,8 @@ pnpm --filter @apphub/core coverage
 | `APPHUB_E2E_PICK_FOLDER` | **仅 E2E**（需 `APPHUB_E2E=1`）：主进程注入「选择文件夹」返回值（绝对目录），不弹原生框 | 未设置（调用返回 canceled） |
 | `APPHUB_E2E_PICK_ZIP` | **仅 E2E**：注入 zip 文件选择返回值（绝对路径） | 未设置（canceled） |
 | `APPHUB_E2E_PICK_FILES` | **仅 E2E**：注入文件多选返回值（JSON 数组字符串，或 `path.delimiter` 分隔） | 未设置（canceled） |
+| `APPHUB_E2E` | E2E 标识（launch helper 默认 `1`）：注入文件选择 + 禁用自动更新（unsupportedReason=`e2e`）。**生产不设置** | 未设置 |
+| `APPHUB_UPDATE_DISABLED=1` | 运行时禁用自动更新（unsupportedReason=`env`，用于排障/离线环境） | 未设置 |
 | `APPHUB_E2E_DEBUG=1` | 实时打印 Electron 主进程 stdout/stderr | 关闭 |
 | `APPHUB_E2E_KEEP_USER_DATA=1` | 用例结束后保留 userData 目录便于排查 | 清理 |
 | `APPHUB_E2E_KEEP_TMP=0` | E2E 结束后删除整个 `e2e/.tmp` | 保留（下次 setup 清空） |
@@ -311,6 +313,17 @@ Playwright **不需要**执行 `playwright install`：E2E 使用 Electron 自带
 | R73 | 文件选择对话框自动化：仅 `APPHUB_E2E=1` 时由主进程注入 `APPHUB_E2E_PICK_*`；生产走真实原生对话框，行为不变 | ARCH §6（测试钩子） | `selection-registry.test.ts`（24）+ E2E 双实例链路 | ✅ |
 | R74 | Windows 安装提交健壮性：staging → `versions/<v>` 目录整体 rename 对 EPERM/EBUSY/EACCES/ENOTEMPTY 重试，失败退化为 copy+rm；旧版本备份/回滚 rename 同样重试；仍失败抛可读 IO（不再误报 AUTH） | ARCH §3.4 / §15 #13 | `core` 单测 5 个（renameWithRetry/moveDirectoryAtomic/library 注入 EPERM）+ E2E 安装链路 | ✅ |
 
+### 5.11 应用内自动更新（Phase 10）
+
+| # | 需求 | 依据 | 自动化覆盖 | 状态 |
+| --- | --- | --- | --- | --- |
+| R75 | 自动检测更新：Windows 安装版启动约 10s 后检查、之后每 6h；自动检查失败只写日志（不打扰用户）；**不自动下载/安装**（autoDownload=false / autoInstallOnAppQuit=false / 不预发布/不回退） | ARCH §5.5 | `updater.test.ts`（12）+ `electron-updater-adapter`；手工 M36 | ✅ |
+| R76 | 非强制更新 Banner：仅 available/downloading/downloaded 且未 dismiss 时显示；提供「立即更新」/「稍后」；dismiss 仅隐藏本次会话 Banner，不改变状态、不强制安装 | ARCH §5.5 | `UpdateBanner.test.tsx` + `UpdateProvider` 测试；E2E（E2E 环境无 Banner） | ✅ |
+| R77 | 用户主动下载：available → downloading（进度百分比/速率）→ downloaded；失败进入 error 可重试；release notes 纯文本展示（不解析 HTML） | ARCH §5.5 | `UpdateDialog.test.tsx` / `SettingsUpdate.test.tsx`（16 个 renderer 更新测试） | ✅ |
+| R78 | 重启安装：仅 downloaded 且用户点击「重启并安装」→ installing → `quitAndInstall`；绝不自动重启；E2E 不点击安装（会退出进程） | ARCH §5.5 | `updater.test.ts`（install 顺序/状态校验） | ✅ |
+| R79 | 手动检查：设置页「检查更新」与弹窗内检查；状态 checking/up-to-date/error 可见；并发检查防抖 | ARCH §5.5 | `SettingsUpdate.test.tsx` + `updater.test.ts`（并发用例） | ✅ |
+| R80 | 不支持环境：dev / platform / e2e / env 时 `supported=false,status='unsupported'`，展示原因、禁用按钮、不发起网络；E2E 环境固定 unsupportedReason='e2e' | ARCH §5.5 | E2E `smoke.spec.ts`（API + 设置页 + 无 Banner/Dialog 断言）；main `ipc.test` 4 个 updates handler | ✅ |
+
 ---
 
 ## 6. 单元测试明细（L0/L1）
@@ -321,7 +334,7 @@ Playwright **不需要**执行 `playwright install`：E2E 使用 Electron 自带
 | `@apphub/storage` | 5 | 56 | local/ftp-http/s3/local-host CRUD/list/stat/probe、Unicode、二进制、非法 key、工厂 |
 | `@apphub/core` | 6 | 123 | 频道生命周期、发布 files/zip（含写入顺序、冲突、幂等、同频道并发串行化）、安装/更新/回滚（Windows rename 重试/复制兜底）、Host 服务、HTTP/state/zip 工具 |
 | `@apphub/testkit` | 0 | 0 | 纯测试基础设施（`--passWithNoTests`，由集成测试间接覆盖） |
-| `@apphub/desktop` | 22 | 273 | 主进程 IPC/校验/selection（含 E2E pick 注入）/launcher/secret-box/host/数据目录（默认 AppHubData/双 env/旧版迁移/启动恢复）+ renderer RTL（视图/组件、HostPanel、向导默认 local-host/端口避让、发布新版本 appId 回归、设置页数据目录文案） |
+| `@apphub/desktop` | 26 | 305 | 主进程 IPC/校验/selection（含 E2E pick 注入）/launcher/secret-box/host/数据目录/自动更新状态机 + renderer RTL（视图/组件、HostPanel、向导默认 local-host/端口避让、发布新版本 appId 回归、设置页数据目录文案、**自动更新 Banner/弹窗/设置卡片 16 个**） |
 | `@apphub/tests`（L2） | 11 | 39 | 见 §7 |
 
 ---
@@ -462,6 +475,7 @@ UI 文案可变，但下列 testid 是 E2E 与 UI 之间的稳定接口（ui-dev
 | 发布向导 | `publish-wizard`、`publish-app-id`（仅新建 App）、`publish-display-name`、`publish-version`、`publish-entry`、`publish-next`、`publish-submit` |
 | 发布向导·文件选择 | `publish-pick-files`、`publish-pick-folder`（zip 模式复用为"选择文件夹并自动打包"）、`publish-pick-zip`（**E2E 点击需主进程注入 PICK_*，否则 canceled、不会弹原生框**） |
 | 设置页（Phase 6） | `data-dir-source`、`data-dir-default-hint`、`change-data-dir-button`、`data-dir-change-error` |
+| 软件更新（Phase 10） | Banner：`update-banner`、`update-open-button`、`update-dismiss-button`；弹窗：`update-dialog`、`update-download-button`、`update-install-button`、`update-progress`、`update-error`、`update-retry-button`、`update-dialog-check-button`；设置页卡片：`update-check-button`、`update-status`、`settings-update-download-button`、`settings-update-install-button`、`settings-update-progress`、`settings-update-error`（settings 前缀用于避免与弹窗同时渲染时 `getByTestId` 冲突） |
 | 通用 | `confirm-ok`、`uninstall-confirm-ok` |
 
 断言策略：优先 testid；`data-*` 用于精确匹配卡片；表单字段错误用 `role="alert"`（避免误匹配
@@ -483,6 +497,7 @@ UI 文案可变，但下列 testid 是 E2E 与 UI 之间的稳定接口（ui-dev
 | `local-host.spec.ts` | 局域网地址可达 | `lanChannelUrls` 形状为 `http://<IPv4>:<port>/channel.json`；逐个 fetch 至少一个 200；**无局域网 IPv4 网卡时 `test.skip` 并写明原因**（Playwright 报告可查） |
 | `local-host.spec.ts` | 私密 local-host 能力链接 | 能力链接含 `_private/<channelId>/<accessKey>`；UI `host-url` 展示该链接；fetch 200 且 `visibility=private`；无 `_private` 前缀 404；篡改 accessKey（32 位 a）404 |
 | `real-local-two-instances.spec.ts` | **双实例真实链路（Phase 9）** | 同时启动 owner/subscriber 两个 Electron（独立 userData）；owner UI 创建 local-host 频道（Host 自动启动）→ UI 发布 v1.0.0（文件夹选择经 `APPHUB_E2E_PICK_FOLDER` 注入、显式 `publish-app-id='twoinst'`、displayName='Two Instance Demo'）→ Node fetch channel.json 断言 1 个 App/appId/latest；subscriber UI 订阅 Host 地址→安装→磁盘 MD5；owner 从 App 详情发布 v1.0.1→channel 仍 1 App 且 appId 不变；subscriber 刷新频道→更新→「已安装 v1.0.1」→磁盘校验→本地库仅 1 App；finally 停 Host/关两实例/清理 |
+| `smoke.spec.ts` | **自动更新 unsupported 态（Phase 10）** | E2E 环境（`APPHUB_E2E=1`）`updates.state()` → `supported=false`、`unsupportedReason='e2e'`、`status='unsupported'`、currentVersion 为 semver；`updates.check()` → `ok:false,code:'UNSUPPORTED'`（不联网/不弹框）；设置页 `update-status`「当前环境不支持自动更新」、`update-check-button` disabled、banner 文案含「E2E 测试模式下自动更新已禁用」「不会发起更新检查网络请求」，且无 `update-banner`/`update-dialog` |
 
 ### 8.6 E2E 失败产物
 
@@ -596,6 +611,21 @@ UI 文案可变，但下列 testid 是 E2E 与 UI 之间的稳定接口（ui-dev
 - **边界**：必须 files 模式；zip 双实例链路留待后续；不做"取消选择"分支（不设 PICK 变量即 canceled，
   由 selection-registry 单测覆盖）。
 
+### 8.12 Phase 10 E2E 说明（应用内自动更新）
+
+- **E2E 环境固定"不支持自动更新"**：`launchApp` 默认注入 `APPHUB_E2E=1`，主进程
+  `resolveUpdateSupport()` 优先级为 `e2e` > `APPHUB_UPDATE_DISABLED` > `platform` > `dev`，
+  因此 E2E 永远得到 `{supported:false, unsupportedReason:'e2e', status:'unsupported'}`。
+  `updates.check/download/install/dismiss` 均返回 `UNSUPPORTED`，**不发起网络、不弹原生对话框、不重启**。
+- **smoke.spec 断言**：API 契约（state/check）+ 设置页禁用态/原因文案 + 不渲染 Banner/Dialog。
+- **为什么不在 E2E 覆盖 available/downloading/install**：需要 `app.isPackaged && platform==='win32'
+  && 非 E2E`，并依赖 GitHub Release 上的 `latest.yml`；点击「重启并安装」会退出 Electron 并重启，
+  破坏用例隔离与报告归属。故 supported 状态链路由 renderer/main 单测覆盖，真实下载/安装列入手工 M36。
+- **真实打包验证**：`pnpm dist:win` 必须产出 `latest.yml`、`AppHub-Setup-<ver>.exe.blockmap`、
+  `win-unpacked/resources/app-update.yml`（GitHub provider）；`release.yml` 会校验并在发版时上传。
+- **注意**：`pnpm package`（`electron-builder --dir`）不会生成 `app-update.yml`（该文件由 nsis/zip
+  目标构建时写入）；如需本地检查 updater 元数据，请用 `pnpm dist:win`。
+
 ---
 
 ## 9. 一键验收脚本（`scripts/verify.mjs`）
@@ -684,10 +714,10 @@ jobs:
 | runner | `windows-latest`，Node 22 + pnpm（packageManager 决定版本） |
 | 前置校验 | tag 必须等于 `v` + 根 `package.json` version，且根与 `apps/desktop` 版本一致，否则 job 直接失败 |
 | 验证 | `pnpm verify:e2e`（完整 14 步，含真实 Electron E2E） |
-| 打包 | `pnpm dist:win` → `AppHub-Setup-<version>.exe` + `AppHub-<version>-win-x64.zip` |
-| 产物校验 | 安装器/zip 存在且非空；zip 内必须包含 `AppHub.exe`；生成 `SHA256SUMS.txt` |
-| Actions artifact | `apphub-windows-<sha>`，保留 14 天（dispatch 也可下载） |
-| Release | `gh release create --generate-notes`；已存在同名 Release 时 `gh release upload --clobber`；tag 含 `-` 自动 `--prerelease` |
+| 打包 | `pnpm dist:win` → `AppHub-Setup-<version>.exe` + `AppHub-<version>-win-x64.zip` + **`latest.yml` + `AppHub-Setup-<version>.exe.blockmap`**（electron-updater GitHub 元数据） |
+| 产物校验 | 安装器/zip 存在且非空；zip 内必须包含 `AppHub.exe`；**`latest.yml` 的 `version`/`path`/非空 `sha512` 且 sha512 与安装器字节一致**；blockmap 存在且非空；`win-unpacked/resources/app-update.yml` 存在且含 GitHub provider（owner/repo）；生成 `SHA256SUMS.txt`（安装器 + zip + latest.yml + blockmap） |
+| Actions artifact | `apphub-windows-<sha>`，保留 14 天（dispatch 也可下载；含 latest.yml/blockmap） |
+| Release | `gh release create --generate-notes`；已存在同名 Release 时 `gh release upload --clobber`；tag 含 `-` 自动 `--prerelease`；**资产包含 latest.yml 与 *.blockmap**（electron-updater 依赖它们判断/差分下载更新） |
 | 权限 | workflow 声明 `contents: write`；仓库 Actions 设置需允许 read/write |
 
 **发布验收（自动化 + 手工）**
@@ -698,6 +728,31 @@ jobs:
 - 手工：M35 从 Release 下载安装器/zip，安装到自定义目录、启动、卸载/解压启动。
 
 本地等价命令：`pnpm dist:win`（生成安装器与 zip，输出到 `apps/desktop/release/`）。
+
+**自动更新发布资产（Phase 10）**
+
+- `pnpm dist:win` 额外产出（electron-builder 的 GitHub provider）：
+  - `apps/desktop/release/latest.yml`：`version` 与 package 版本一致、`path` 为 `AppHub-Setup-<version>.exe`、
+    非空 `sha512`（workflow 会校验与安装器实际字节一致）；
+  - `apps/desktop/release/AppHub-Setup-<version>.exe.blockmap`：差分下载元数据，必须与安装器一起上传；
+  - `apps/desktop/release/win-unpacked/resources/app-update.yml`：运行时 updater 配置
+    （`provider: github` / `owner: Gemini2015` / `repo: AppHub` / `releaseType: release`）。
+- 发版时 `release.yml` 会校验上述元数据，并把 `latest.yml`、`*.blockmap` 纳入 Actions artifact 与
+  GitHub Release 资产；`SHA256SUMS.txt` 覆盖安装器 + zip + latest.yml + blockmap。
+- **首版限制**：真正启用自动更新需要"用户已安装的版本"自身带 updater（本仓库从 Phase 10 起才具备），
+  且 Release 中存在 `latest.yml`/blockmap。v0.1.0/v0.1.1 的 Release 没有这些资产，**首个带 updater 的
+  版本需要用户手动下载安装**；从该版本之后才能自动检测/下载/安装后续 Release。
+- **绝不自动发布**：本地/PR 验证使用 `pnpm dist:win`（`--publish never`）；只有推送 `v*` tag 的
+  release workflow 才会创建/更新 GitHub Release（需人工打 tag，属发布决策）。
+
+本地检查命令（PowerShell）：
+
+```powershell
+$v = node -p "require('./apps/desktop/package.json').version"
+Get-Content apps/desktop/release/latest.yml
+Get-ChildItem apps/desktop/release/*.blockmap
+Get-Content apps/desktop/release/win-unpacked/resources/app-update.yml
+```
 
 ---
 
@@ -770,14 +825,17 @@ jobs:
 | M33 | 两个环境变量同时设置 | 同时设置 `APPHUB_DATA_DIR=E` 与 `APPHUB_USER_DATA_DIR=U` 启动，观察 `system.info` 与设置页 | 优先级：`APPHUB_DATA_DIR` 胜出（dataDir=E，source=env，editable=false）；Electron userData 仍为 U；设置页 env hint 同时展示两个变量说明；修改数据目录按钮 disabled |
 | M34 | 迁移失败 / 只读磁盘回退 | 旧版数据在只读目录/权限不足、或迁移中途目标不可写；以及旧版迁移时 AppHubData 已有数据 | 迁移失败时本次启动回退旧目录（数据仍可用）并记录可读错误，下次启动重试；目标已有数据时跳过迁移不覆盖；不产生半迁移数据（move 回滚） |
 | M35 | GitHub Release 安装包验收（Phase 8 CI/CD） | 从 GitHub Releases 下载 `AppHub-Setup-<version>.exe` 与 `AppHub-<version>-win-x64.zip`；安装器选择自定义目录安装并启动；卸载后检查残留；zip 解压后运行 `AppHub.exe` | 版本号与 tag 一致；安装器创建快捷方式/卸载项、可启动；卸载后程序目录/快捷方式移除；zip 解压即用；`SHA256SUMS.txt` 校验一致；**不要求代码签名/SmartScreen 处理** |
+| M36 | 真实自动更新全链路（Phase 10） | ① 在 Windows 上安装**旧版本**（带 updater 的版本，如后续 v0.2.0），确认设置页「检查更新」可用；② 发布一个更高版本 GitHub Release（含 latest.yml/blockmap/Setup exe，由 release workflow 自动完成）；③ 启动旧版本等待约 10s（或手动点「检查更新」）→ Banner「发现新版本 vX」；④ 点「稍后」确认 Banner 隐藏且 App 可正常使用；⑤ 设置页手动检查 → 下载 → 进度到 100% → 「更新已下载」；⑥ 点「重启并安装」→ App 退出并自动重启 → 设置页显示新版本；⑦ 恢复网络/制造 404 后检查更新，确认只日志不打扰 | 自动检测/非强制 Banner/稍后/手动检查/下载进度/重启安装全链路可用；**不自动下载、不自动安装**；安装失败或网络错误有可读提示且不破坏当前版本；非 Windows 平台显示「当前平台不支持自动更新」；E2E/dev 环境 unsupported 且不联网 |
 
 > 说明：旧版自动迁移本身已有 E2E（`settings-data-dir.spec.ts > 旧版数据自动迁移`），
 > M32 面向真实历史用户数据（含 secrets/library/Chromium 共存、大数据量）的人工升级验证；
 > M33/M34 覆盖优先级与失败回退等难以在 E2E 安全注入的场景。
+> M36 的"下载→安装→重启"依赖真实 GitHub Release 资产与已安装版本，E2E 无法安全自动化
+> （会退出进程 + 需要已发布的 latest.yml）；E2E 只覆盖 unsupported 态（见 §8.12）。
 
 ---
 
-## 12. 实际执行结果（2026-10-28，Phase 9：双实例真实链路）
+## 12. 实际执行结果（2026-10-28，Phase 10：应用内自动更新）
 
 ### 12.1 环境
 
@@ -787,35 +845,36 @@ jobs:
 | Node | v22.23.2 |
 | pnpm | 11.22.0 |
 | Electron | 38.8.6（apps/desktop devDependency） |
+| electron-updater | ^6.8.11（依赖，bundled 进 app.asar） |
 | Playwright | @playwright/test 1.64.1（`_electron`，无浏览器安装） |
-| 网络 | 完全离线（FTP/HTTP/S3 均为进程内模拟；本机 Host 为 127.0.0.1 回环 + 本机 LAN IPv4） |
+| 网络 | 完全离线（FTP/HTTP/S3 均为进程内模拟；本机 Host 为 127.0.0.1 回环 + 本机 LAN IPv4）；E2E 自动更新 unsupported，不发起网络 |
 | 数据目录隔离 | 默认 `APPHUB_USER_DATA_DIR`；Phase 6/7 另用 `--user-data-dir` 与 `APPHUB_DATA_DIR`；双实例 E2E 用两个独立 userData |
 | 文件选择 | E2E 通过 `APPHUB_E2E=1` + `APPHUB_E2E_PICK_FOLDER` 注入（生产走真实原生对话框） |
 
 ### 12.2 一键验收 `pnpm verify:e2e`
 
 ```
-合计 14 步：14 通过，0 失败，0 未运行；总耗时 89.4s
+合计 14 步：14 通过，0 失败，0 未运行；总耗时 94.3s
 结果：PASS
 ```
 
 | 步骤 | 结果 | 耗时 |
 | --- | --- | --- |
 | test @apphub/protocol | ✅ 27 tests | 1.9s |
-| test @apphub/storage | ✅ 56 tests | 2.9s |
-| test @apphub/core | ✅ 123 tests | 4.4s |
-| test @apphub/testkit | ✅ 无测试文件（`--passWithNoTests`，设计如此） | 1.1s |
-| test @apphub/tests（集成） | ✅ 39 tests / 11 files | 5.0s |
-| test @apphub/desktop | ✅ 273 tests / 22 files | 11.4s |
-| typecheck × 6 包 | ✅ 全部通过 | 1.1~4.0s |
+| test @apphub/storage | ✅ 56 tests | 2.8s |
+| test @apphub/core | ✅ 123 tests | 4.3s |
+| test @apphub/testkit | ✅ 无测试文件（`--passWithNoTests`，设计如此） | 1.0s |
+| test @apphub/tests（集成） | ✅ 39 tests / 11 files | 6.2s |
+| test @apphub/desktop | ✅ **305 tests / 26 files** | 11.9s |
+| typecheck × 6 包 | ✅ 全部通过 | 1.1~4.1s |
 | build @apphub/desktop | ✅ 产出 `out/main`、`out/preload`、`out/renderer` | 1.7s |
-| e2e @apphub/desktop | ✅ 18 tests / 8 specs | 47.7s |
+| e2e @apphub/desktop | ✅ **19 tests / 8 specs** | 52.5s |
 
-**自动化用例合计：518 个 Vitest 用例 + 18 个 Electron E2E 用例，0 skipped。**
-（Phase 9 变更：新增 `real-local-two-instances.spec.ts`（1 用例，真实双 Electron：A UI 发布→Host→B UI
-订阅/安装→A 发新版→B 刷新/更新）；core 118 → 123（安装提交 Windows rename 重试/复制兜底 5 个回归）；
-desktop 267 → 273（publish-app-id/新 testid/发布新版本 appId 回归等）；集成测试保持 39（含 repair 工具）。
-另：`pnpm test:e2e` 单独执行 18/18 通过两次（1.4m / 1.5m）。）
+**自动化用例合计：550 个 Vitest 用例 + 19 个 Electron E2E 用例，0 skipped。**
+（Phase 10 变更：`updater.ts` + `electron-updater-adapter.ts` + main `updater.test.ts`（12）+
+ipc updates handler 测试（4）；renderer 新增自动更新 Banner/弹窗/设置卡片 16 个测试（renderer 87 tests）；
+E2E 新增 `smoke.spec.ts` 自动更新 unsupported 态断言（1）。desktop 273 → 305（22 → 26 files）。
+`pnpm test:e2e` 单独执行 19/19 通过（51.3s）。）
 
 ### 12.3 覆盖率（可选）
 
@@ -828,21 +887,16 @@ desktop 267 → 273（publish-app-id/新 testid/发布新版本 appId 回归等�
 | Functions | 92.05% |
 | Lines | 85.92% |
 
-（core 共 123 单测 + 39 集成测试共同覆盖；`host.ts` 85.16%、`publish.ts` 92.12%；`mutex.ts`/`progress.ts` 100%。）
+（core 共 123 单测 + 39 集成测试共同覆盖；`host.ts` 85.16%、`publish.ts` 92.12%；`mutex.ts`/`progress.ts` 100%。Phase 10 未改 core。）
 
 ### 12.4 E2E 稳定性
 
-- Phase 9 全量 E2E：18/18 通过（`pnpm test:e2e` 连续 2 次：1.4m / 1.5m；
-  `pnpm verify:e2e` 连续 3 次 PASS：142.6s / 107.9s / 89.4s）。
-- 双实例用例单独运行 2 次均通过（10.5~16.3s）；覆盖"A 发布→B 订阅安装→A 发新版→B 刷新更新"真实链路，
-  并断言 channel.json 始终 1 个 App、appId 保持 `twoinst`。
-- 收尾发现并闭环 2 个问题：
-  1. **产品侧（core-dev 已修）**：Windows 上 `staging → versions/<v>` 目录 rename 偶发 EPERM
-     （README/CI 无影响，E2E 约 1/5~1/8 概率安装失败，且被误映射为 AUTH）。修复：目录 rename 重试 +
-     copy+rm 兜底 + 可读 IO 错误；集成连跑 15 次、E2E 连跑多次均通过。见 §15 #13。
-  2. **测试侧**：双实例用例里 `getByText(/2 个文件/)` 未限定作用域，命中底层页面文案导致 strict mode
-     失败；限定到 `publish-wizard` 内后稳定。见 §15 #14。
-- Phase 6/7 记录的历史问题（选择器作用域/端口竞争/旧版迁移）本轮未复现。
+- Phase 10 全量 E2E：**19/19 通过**（`pnpm test:e2e` 51.3s；`pnpm verify:e2e` 内 52.5s）。
+- 新增自动更新 unsupported 断言首次接入即通过：`updates.state()`/`check()` 契约 + 设置页禁用态 +
+  不渲染 Banner/Dialog；E2E 环境不发起任何更新网络请求（`unsupportedReason='e2e'`）。
+- `pnpm dist:win` 独立执行 2 次均成功（第二次用于 `package --dir` 后恢复并校验 updater 元数据），
+  产物校验见 §12.7；全程未打 tag、未发布 Release。
+- 历史 Phase 6/7/9 问题（选择器作用域/端口竞争/旧版迁移/安装 EPERM）本轮均未复现。
 
 ### 12.5 跳过/未执行项
 
@@ -850,14 +904,15 @@ desktop 267 → 273（publish-app-id/新 testid/发布新版本 appId 回归等�
 | --- | --- | --- |
 | 真实 FTP/nginx/MinIO 服务 | 自动化必须离线，CI 不部署外部服务 | 列入 §11 手工清单 M1–M4 |
 | 原生文件/目录对话框、真实启动外部 App、打包安装 | Playwright 无法驱动系统对话框；E2E 的文件选择走主进程测试注入，不是真实对话框 | §11 M5–M7、M10–M14、M22–M23、M35 |
-| **点击「更改数据目录」→ 迁移 → 重启** | 先弹原生目录选择框，确认后 App 重启并断开会话；E2E 已覆盖启动期 env/default/custom 与旧版自动迁移，但不覆盖"点击迁移"动作 | 迁移逻辑由 `data-dir.test.ts` 39 单测 + 手工 M28–M34 覆盖（原因见 §8.9/§8.10/§11.5） |
+| **自动更新"下载→安装→重启"** | 需打包 Windows 安装版 + GitHub Release 含 latest.yml/blockmap + 已安装旧版本；安装会退出进程、破坏 E2E 隔离 | 单测覆盖状态机/adapter；`dist:win` 校验元数据；真实链路手工 M36 |
+| **跨平台自动更新** | 产品只支持 Windows 安装版；macOS/Linux 为 unsupported（单测覆盖 platform 原因） | 发布前手工验证非 Windows 显示「当前平台不支持自动更新」 |
+| 点击「更改数据目录」→ 迁移 → 重启 | 先弹原生目录选择框，确认后 App 重启并断开会话；E2E 已覆盖启动期 env/default/custom 与旧版自动迁移，但不覆盖"点击迁移"动作 | 迁移逻辑由 `data-dir.test.ts` 39 单测 + 手工 M28–M34 覆盖（原因见 §8.9/§8.10/§11.5） |
 | 双实例 zip 模式 / 真实两台设备局域网 | E2E 只覆盖 files 模式 + 本机回环；跨设备/防火墙/端口转发需要真实网络 | 手工 M21–M25；zip 双实例留待后续 |
 | macOS/Linux 实机 GUI | 当前环境仅 Windows；命令与 CI 配置已就绪 | 发布前手工 M5–M7 |
 | 无网卡环境的 LAN URL 可达性 | 隔离 CI 容器可能没有非 internal IPv4 | E2E 用例显式 `test.skip` 并写明原因（不静默）；首选地址回退回环有断言 |
 
-> 没有为了"变绿"而 skip 任何计划内用例；Phase 9 的双实例 E2E 真实执行（双 Electron + 真发布/安装/更新），
-> 文件选择仅"选择结果"由主进程注入，后续 SelectionRegistry 校验/发布/下载/安装全部走真实 core。
-> 原生对话框本身仍由手工 M10 覆盖，不是静默跳过。
+> 没有为了"变绿"而 skip 任何计划内用例；Phase 10 的 unsupported 态在真实 Electron 中执行。
+> 真实更新链路依赖已发布 Release 与安装版，明确列为手工 M36；E2E 不点击「重启并安装」（会退出进程）。
 
 ### 12.6 发布工作流试跑（Phase 8，2026-10-28）
 
@@ -869,6 +924,23 @@ desktop 267 → 273（publish-app-id/新 testid/发布新版本 appId 回归等�
 | Release（dispatch） | 按设计**未创建**（dispatch 仅构建） |
 | 正式发布（tag `v0.1.0`，run 40619954907） | ✅ Success，5m29s；[GitHub Release v0.1.0](https://github.com/Gemini2015/AppHub/releases/tag/v0.1.0) 已发布 3 个资产：`AppHub-Setup-0.1.0.exe`（94.2 MB）、`AppHub-0.1.0-win-x64.zip`（133.9 MB）、`SHA256SUMS.txt`（0.1 MB）；`SHA256SUMS.txt` 与 Release asset digest 逐项一致 |
 | 本地等价验证 | `pnpm package`（--dir）通过；`pnpm dist:win` 产出安装器/zip 并通过 zip 内 `AppHub.exe`、大小与 SHA-256 校验 |
+
+### 12.7 自动更新发布资产本地验证（Phase 10，2026-10-28）
+
+`pnpm dist:win`（= `--win nsis zip --publish never`，**未打 tag、未发布**）在 `apps/desktop/release/` 产出：
+
+| 产物 | 校验结果 |
+| --- | --- |
+| `latest.yml` | `version: 0.1.1`、`path: AppHub-Setup-0.1.1.exe`、`sha512` 非空且与实际安装器 SHA-512（base64）**逐字节一致**；含 `releaseDate` |
+| `AppHub-Setup-0.1.1.exe.blockmap` | 存在且非空（105,393 bytes） |
+| `win-unpacked/resources/app-update.yml` | `provider: github` / `owner: Gemini2015` / `repo: AppHub` / `releaseType: release` / `updaterCacheDirName` |
+| `win-unpacked/resources/app.asar` | 含 `node_modules/electron-updater` 与 `builder-util-runtime`（esbuild external 由 electron-builder 打入） |
+| `SHA256SUMS.txt`（按 release.yml 逻辑模拟） | 覆盖 4 项：安装器、zip、latest.yml、blockmap（重跑 `release.yml` 的产物校验步骤应通过） |
+| `pnpm package`（--dir） | 成功；注意 `--dir` 不生成 `app-update.yml`（该文件由 nsis/zip 目标构建写入），需要检查元数据时用 `pnpm dist:win` |
+
+> 结论：发布资产格式与 `release.yml` 新增校验（latest.yml/blockmap/app-update.yml + SHA256SUMS 四件套）
+> 已在本地验证通过；**v0.1.0/v0.1.1 的 GitHub Release 尚无 latest.yml**，真实自动更新链路需等下一次
+> 带本 Phase 改动的发布，并由人工在真实安装版上执行 M36。
 
 ---
 
@@ -930,6 +1002,14 @@ desktop 267 → 273（publish-app-id/新 testid/发布新版本 appId 回归等�
     仍失败则返回可读 `IO` 错误（不再是 AUTH）。这是对杀软/索引器等外部占用的兜底，不是原子性弱化。
 26. **E2E 文件选择注入不改变产品行为**：注入只在 `APPHUB_E2E=1` 时生效；未注入时 `publish.pick`
     返回 canceled（不弹原生框）。因此 E2E 覆盖"选择之后的完整链路"，原生对话框交互仍需手工 M10。
+27. **自动更新仅在"打包的 Windows 安装版"启用**（Phase 10）：`dev`（未打包）、`platform`（非 win32）、
+    `e2e`（APPHUB_E2E=1）、`env`（APPHUB_UPDATE_DISABLED=1）均为 unsupported，不联网；
+    开发/测试环境无法验证真实下载/安装，需手工 M36。
+28. **自动更新不强制、不自动**：只自动检查（10s/6h），下载与安装必须用户点击；安装会退出并重启；
+    E2E 绝不点击安装。release notes 以纯文本展示（不渲染 HTML）。
+29. **首个带 updater 的版本需手动安装**：v0.1.0/v0.1.1 的 Release 无 `latest.yml`/blockmap；
+    从带本 Phase 改动发布的版本起才会生成，之后旧版本才能自动更新。不做代码签名/SmartScreen 处理，
+    更新来源为 GitHub Releases（latest.yml 的 sha512 校验安装包完整性）。
 
 ---
 
@@ -965,6 +1045,10 @@ desktop 267 → 273（publish-app-id/新 testid/发布新版本 appId 回归等�
 | 双实例 E2E 报 `strict mode violation`（如 `getByText(/2 个文件/)` 命中 2 个元素） | 选择器未限定模态框作用域，底层页面也有相同文案 | 选择器限定在 `publish-wizard` 等容器内（见 §15 #14）；测试侧问题，不影响产品 |
 | 创建向导端口推荐值不是预期 | 页面已有 local-host 频道占用了 8787/8788，或 `host.list` 尚未返回 | 等 `toHaveValue` 稳定值；确认预置频道的 `configuredPort`；没有已用端口时默认 8787 |
 | 设置页「更改数据目录」按钮灰色 | 当前以 `APPHUB_DATA_DIR` 或 `APPHUB_USER_DATA_DIR` 启动（env 模式只读）或正在迁移 | 移除环境变量后重启；env 固定属预期行为 |
+| 设置页「检查更新」按钮灰色 / 显示"当前环境不支持自动更新" | 未打包（dev）、非 Windows、E2E（`APPHUB_E2E=1`）或 `APPHUB_UPDATE_DISABLED=1` | 属预期；真实自动更新需安装 Windows 安装版（手工 M36）；E2E 断言见 §8.12 |
+| 自动检查更新无任何提示 | 自动检查失败只写 main.log（不打扰用户），或当前 Release 没有 `latest.yml`（旧版本 v0.1.0/v0.1.1） | 手动点「检查更新」看 state；确认 Release 资产含 latest.yml/blockmap；日志搜 `update` |
+| 下载更新失败 | 网络/GitHub Release 资产缺失或 sha512 不匹配 | 看 `update-error` 文案与 main.log；确认 latest.yml 与 Setup exe 一致（release workflow 已校验） |
+| 安装后仍是旧版本 | 未真正点击「重启并安装」/ 安装被中断 | 更新为 downloaded 后再触发安装；确认安装器正常退出重启；参见 M36 |
 | 数据目录显示为 `<userData>/AppHubData` 而不是 userData 根 | Phase 7 默认行为（AppHubData 子目录隔离） | 属预期；Chromium 缓存仍在 userData 根 |
 | 数据目录显示为某个 userData 根目录 | 设置了 `APPHUB_USER_DATA_DIR`（历史语义：整体覆盖 userData） | 确认是否要改用 `APPHUB_DATA_DIR`（只改 AppHub 数据） |
 | 两个环境变量同时设置时以哪个为准 | 优先级：`APPHUB_DATA_DIR` > `APPHUB_USER_DATA_DIR` | 看系统信息数据目录与设置页 env hint；去掉 `APPHUB_DATA_DIR` 后回落到 userData 语义 |
@@ -1014,6 +1098,11 @@ desktop 267 → 273（publish-app-id/新 testid/发布新版本 appId 回归等�
 > Phase 9（双实例真实链路）**发现并修复 1 个产品缺陷**（#13 Windows 安装提交 EPERM，core-dev 修复）
 > 与 1 个测试侧定位问题（#14）；修复后双实例 E2E 与全量 18 条 E2E 连续多轮全绿。
 > 双实例用例把 #12（appId≠slug 时发布新版）作为常驻回归。
+>
+> Phase 10（应用内自动更新）**未发现源码缺陷**；E2E 环境 unsupported 态断言（API + 设置页 + 不渲染
+> Banner/Dialog）首次接入即通过。真实"下载→安装→重启"链路由单测 + `pnpm dist:win` 元数据校验 +
+> 手工 M36 覆盖（需真实 GitHub Release 与已安装旧版本；E2E 不点击安装以免退出进程）。
+> 发布资产校验（latest.yml/blockmap/app-update.yml）由 `.github/workflows/release.yml` 强制执行。
 
 ---
 
@@ -1035,11 +1124,11 @@ desktop 267 → 273（publish-app-id/新 testid/发布新版本 appId 回归等�
 | `local-host.test.ts` | 7 | 公开全链路（start→订阅→安装→更新 MD5 复用→stop 失败→restart→卸载）；私密能力链接/错误 accessKey 404/非管理员 publish；zip 安装；端口冲突 CONFLICT；stop 后端口复用；updateConfig（STATE/端口/advertiseHost/rootDir 不可改）；非 local-host UNSUPPORTED/NOT_FOUND |
 | `repair-duplicate-app.test.ts` | 2 | 修复历史重复 App：版本目录/元信息/channel.json 合并、备份；dry-run 不修改；版本冲突拒绝 |
 
-### 16.2 E2E（`apps/desktop/e2e`，18 用例）
+### 16.2 E2E（`apps/desktop/e2e`，19 用例）
 
 | spec | 用例数 |
 | --- | --- |
-| `smoke.spec.ts` | 2 |
+| `smoke.spec.ts` | 3（启动冒烟 ×2 + 自动更新 unsupported 态） |
 | `subscribe-install-uninstall.spec.ts` | 2 |
 | `create-channel.spec.ts` | 1（含默认 local-host/端口 8787 断言） |
 | `create-channel-port.spec.ts` | 3（规则避让/两端口避让/手动覆盖+重复端口校验） |
@@ -1048,7 +1137,7 @@ desktop 267 → 273（publish-app-id/新 testid/发布新版本 appId 回归等�
 | `local-host.spec.ts` | 3（创建/自动启动/停止重启、LAN 可达性、私密能力链接） |
 | `real-local-two-instances.spec.ts` | 1（双实例：A UI 建 local-host/发布 v1.0.0→B 订阅安装→A 发 v1.0.1→B 刷新更新；channel 始终 1 App、appId 不变） |
 
-详见 §8.5 表格；双实例细节见 §8.11。
+详见 §8.5 表格；双实例细节见 §8.11；自动更新 E2E 边界见 §8.12。
 
 ### 16.3 常用调试命令
 
@@ -1067,4 +1156,12 @@ APPHUB_E2E_KEEP_USER_DATA=1 pnpm test:e2e
 
 # 只跑集成测试中的真实 FTP 场景
 pnpm --filter @apphub/tests test -- real-ftp-http
+
+# 自动更新发布元数据（本地，不发布）
+pnpm dist:win
+Get-Content apps/desktop/release/latest.yml
+Get-Content apps/desktop/release/win-unpacked/resources/app-update.yml
+
+# 验证 release workflow 的产物校验逻辑（本地等价）
+# 参见 §12.7 的 latest.yml / blockmap / app-update.yml 检查命令
 ```

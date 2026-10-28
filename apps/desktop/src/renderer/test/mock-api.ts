@@ -22,6 +22,8 @@ import type {
   ProgressEventDTO,
   SystemInfoDTO,
   UpdateCheckDTO,
+  UpdateProgressDTO,
+  UpdateStateDTO,
   VerifyResultDTO,
 } from '../../../shared/ipc';
 
@@ -305,6 +307,67 @@ export function makeRunningHostStatus(overrides: Partial<HostStatusDTO> = {}): H
 }
 
 // ---------------------------------------------------------------------------
+// 自动更新 fixtures
+// ---------------------------------------------------------------------------
+
+export const RELEASE_NOTES = '## 更新内容\n- 添加自动更新\n- 修复若干问题';
+
+export function makeUpdateProgress(overrides: Partial<UpdateProgressDTO> = {}): UpdateProgressDTO {
+  return {
+    percent: 42,
+    transferred: 4200,
+    total: 10000,
+    bytesPerSecond: 512 * 1024,
+    ...overrides,
+  };
+}
+
+/** 默认：非打包环境（dev），不支持自动更新。 */
+export function makeUpdateState(overrides: Partial<UpdateStateDTO> = {}): UpdateStateDTO {
+  return {
+    supported: false,
+    unsupportedReason: 'dev',
+    status: 'unsupported',
+    currentVersion: '0.1.0',
+    ...overrides,
+  };
+}
+
+/** 有可用更新（available）。 */
+export function makeAvailableUpdate(overrides: Partial<UpdateStateDTO> = {}): UpdateStateDTO {
+  return makeUpdateState({
+    supported: true,
+    unsupportedReason: undefined,
+    status: 'available',
+    currentVersion: '0.1.0',
+    availableVersion: '0.2.0',
+    releaseName: 'AppHub v0.2.0',
+    releaseNotes: RELEASE_NOTES,
+    releaseDate: NOW,
+    lastCheckedAt: NOW,
+    ...overrides,
+  });
+}
+
+/** 正在下载（downloading），带进度。 */
+export function makeDownloadingUpdate(overrides: Partial<UpdateStateDTO> = {}): UpdateStateDTO {
+  return makeAvailableUpdate({
+    status: 'downloading',
+    progress: makeUpdateProgress(),
+    ...overrides,
+  });
+}
+
+/** 已下载（downloaded），可重启安装。 */
+export function makeDownloadedUpdate(overrides: Partial<UpdateStateDTO> = {}): UpdateStateDTO {
+  return makeAvailableUpdate({
+    status: 'downloaded',
+    progress: makeUpdateProgress({ percent: 100, transferred: 10000 }),
+    ...overrides,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // mock API
 // ---------------------------------------------------------------------------
 
@@ -315,17 +378,20 @@ export interface MockApiOptions {
   host?: Partial<AppHubApi['host']>;
   publish?: Partial<AppHubApi['publish']>;
   library?: Partial<AppHubApi['library']>;
+  updates?: Partial<AppHubApi['updates']>;
   events?: Partial<AppHubApi['events']>;
 }
 
 export interface MockAppHubApi extends AppHubApi {
   emitProgress(event: ProgressEventDTO): void;
   emitDataChanged(event: DataChangedEventDTO): void;
+  emitUpdateState(state: UpdateStateDTO): void;
 }
 
 export function createMockApi(options: MockApiOptions = {}): MockAppHubApi {
   const progressHandlers = new Set<(event: ProgressEventDTO) => void>();
   const dataChangedHandlers = new Set<(event: DataChangedEventDTO) => void>();
+  const updateStateHandlers = new Set<(state: UpdateStateDTO) => void>();
 
   const base: AppHubApi = {
     system: {
@@ -400,6 +466,14 @@ export function createMockApi(options: MockApiOptions = {}): MockAppHubApi {
       launch: vi.fn(async () => ok({ pid: 4242 })),
       reveal: vi.fn(async () => ok(undefined)),
     },
+    // 默认：开发环境不支持自动更新（无网络、无 Banner）；需要更新 UI 的测试显式覆盖。
+    updates: {
+      state: vi.fn(async () => ok(makeUpdateState())),
+      check: vi.fn(async () => ok(makeUpdateState())),
+      download: vi.fn(async () => ok(makeDownloadingUpdate())),
+      install: vi.fn(async () => ok(undefined)),
+      dismiss: vi.fn(async () => ok(makeAvailableUpdate({ dismissed: true }))),
+    },
     events: {
       onProgress: vi.fn((handler: (event: ProgressEventDTO) => void) => {
         progressHandlers.add(handler);
@@ -413,6 +487,12 @@ export function createMockApi(options: MockApiOptions = {}): MockAppHubApi {
           dataChangedHandlers.delete(handler);
         };
       }),
+      onUpdateState: vi.fn((handler: (state: UpdateStateDTO) => void) => {
+        updateStateHandlers.add(handler);
+        return () => {
+          updateStateHandlers.delete(handler);
+        };
+      }),
     },
   };
 
@@ -423,6 +503,7 @@ export function createMockApi(options: MockApiOptions = {}): MockAppHubApi {
     host: { ...base.host, ...options.host },
     publish: { ...base.publish, ...options.publish },
     library: { ...base.library, ...options.library },
+    updates: { ...base.updates, ...options.updates },
     events: { ...base.events, ...options.events },
   };
 
@@ -430,6 +511,7 @@ export function createMockApi(options: MockApiOptions = {}): MockAppHubApi {
     ...merged,
     emitProgress: (event: ProgressEventDTO) => progressHandlers.forEach((handler) => handler(event)),
     emitDataChanged: (event: DataChangedEventDTO) => dataChangedHandlers.forEach((handler) => handler(event)),
+    emitUpdateState: (state: UpdateStateDTO) => updateStateHandlers.forEach((handler) => handler(state)),
   };
 }
 

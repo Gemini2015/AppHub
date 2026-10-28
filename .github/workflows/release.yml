@@ -60,12 +60,54 @@ jobs:
         shell: pwsh
         run: |
           $release = "apps/desktop/release"
-          $installer = Get-ChildItem -Path $release -Filter "AppHub-Setup-*.exe" -File | Select-Object -First 1
+          $version = node -p "require('./apps/desktop/package.json').version"
+          # 排除 NSIS 卸载器 __uninstaller.exe，只取真正的安装器
+          $installer = Get-ChildItem -Path $release -Filter "AppHub-Setup-*.exe" -File |
+            Where-Object { $_.Name -notmatch '__uninstaller' } | Select-Object -First 1
           $zip = Get-ChildItem -Path $release -Filter "AppHub-*-win-x64.zip" -File | Select-Object -First 1
           if (-not $installer) { throw "未生成 NSIS 安装器（AppHub-Setup-*.exe）" }
           if (-not $zip) { throw "未生成 zip（AppHub-*-win-x64.zip）" }
           if ($installer.Length -lt 20MB) { throw "安装器过小：$($installer.Length) bytes" }
           if ($zip.Length -lt 20MB) { throw "zip 过小：$($zip.Length) bytes" }
+
+          # ---- 自动更新元数据（electron-builder GitHub provider）----
+          $expectedInstaller = "AppHub-Setup-$version.exe"
+          $latestPath = Join-Path $release "latest.yml"
+          if (-not (Test-Path $latestPath)) {
+            throw "未生成 latest.yml（自动更新元数据）；请检查 electron-builder build.publish 配置与 --publish never 参数"
+          }
+          $latest = Get-Content $latestPath -Raw
+          if ($latest -notmatch "(?m)^version:\s*$([regex]::Escape($version))\s*$") {
+            throw "latest.yml 的 version 不是 $version：`n$latest"
+          }
+          if ($latest -notmatch "(?m)^path:\s*$([regex]::Escape($expectedInstaller))\s*$") {
+            throw "latest.yml 的 path 不是 $expectedInstaller：`n$latest"
+          }
+          if ($latest -notmatch "(?m)^sha512:\s*\S+") {
+            throw "latest.yml 缺少非空 sha512：`n$latest"
+          }
+          # sha512 必须与安装器字节一致，避免元数据与产物错配
+          $installerSha512 = [Convert]::ToBase64String(
+            [System.Security.Cryptography.SHA512]::Create().ComputeHash([System.IO.File]::ReadAllBytes($installer.FullName))
+          )
+          if (-not $latest.Contains($installerSha512)) {
+            throw "latest.yml 的 sha512 与实际安装器不一致（期望 $installerSha512）"
+          }
+
+          $blockmapPath = Join-Path $release "$expectedInstaller.blockmap"
+          if (-not (Test-Path $blockmapPath)) { throw "未生成 $expectedInstaller.blockmap" }
+          if ((Get-Item $blockmapPath).Length -le 0) { throw "blockmap 为空（$blockmapPath）" }
+
+          $appUpdatePath = Join-Path $release "win-unpacked/resources/app-update.yml"
+          if (-not (Test-Path $appUpdatePath)) {
+            throw "win-unpacked/resources/app-update.yml 缺失（electron-updater 运行时配置）"
+          }
+          $appUpdate = Get-Content $appUpdatePath -Raw
+          foreach ($needle in @("provider: github", "owner: Gemini2015", "repo: AppHub")) {
+            if (-not $appUpdate.Contains($needle)) {
+              throw "app-update.yml 缺少 '$needle'：`n$appUpdate"
+            }
+          }
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $archive = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
@@ -78,7 +120,8 @@ jobs:
             throw "zip 中未找到 AppHub.exe；实际条目示例：$($entryNames | Select-Object -First 5)"
           }
 
-          $assets = @($installer.FullName, $zip.FullName)
+          # ---- SHA256SUMS：安装器 + zip + latest.yml + blockmap ----
+          $assets = @($installer.FullName, $zip.FullName, $latestPath, $blockmapPath)
           $checksumFile = Join-Path $release "SHA256SUMS.txt"
           $lines = foreach ($asset in $assets) {
             $hash = (Get-FileHash -Path $asset -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -86,10 +129,10 @@ jobs:
           }
           $lines | Set-Content -Path $checksumFile -Encoding ascii
 
-          Write-Host "产物校验通过："
+          Write-Host "产物校验通过（含自动更新元数据）："
           Get-ChildItem -Path $release -File |
-            Where-Object { $_.Extension -in '.exe', '.zip', '.txt' } |
-            ForEach-Object { Write-Host ("  {0} ({1:N1} MB)" -f $_.Name, ($_.Length / 1MB)) }
+            Where-Object { $_.Extension -in '.exe', '.zip', '.txt', '.yml', '.blockmap' } |
+            ForEach-Object { Write-Host ("  {0} ({1:N2} MB)" -f $_.Name, ($_.Length / 1MB)) }
 
       # 手动 dispatch 也可下载产物；tag 发布时用于 GitHub Release 资产。
       - name: Upload release artifacts
@@ -99,6 +142,8 @@ jobs:
           path: |
             apps/desktop/release/AppHub-Setup-*.exe
             apps/desktop/release/AppHub-*-win-x64.zip
+            apps/desktop/release/latest.yml
+            apps/desktop/release/*.blockmap
             apps/desktop/release/SHA256SUMS.txt
           retention-days: 14
           if-no-files-found: error
@@ -114,6 +159,8 @@ jobs:
           assets=(
             apps/desktop/release/AppHub-Setup-*.exe
             apps/desktop/release/AppHub-*-win-x64.zip
+            apps/desktop/release/latest.yml
+            apps/desktop/release/*.blockmap
             apps/desktop/release/SHA256SUMS.txt
           )
           if gh release view "$tag" >/dev/null 2>&1; then
