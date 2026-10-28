@@ -14,6 +14,35 @@ AppHub 是一个**去中心化的 App 分享客户端**：
 
 平台：Electron + React + TypeScript，跨 Windows / Linux / macOS。
 
+### 1.1 运行时总览
+
+```
+┌──────────────────────────── Electron App ────────────────────────────┐
+│  Renderer (React UI)  ⇄  preload (contextBridge)  ⇄  Main Process    │
+│                                                      │               │
+│                        ┌─────────────────────────────┴───────────┐   │
+│                        │ @apphub/core                             │   │
+│                        │  channels | publishing | library | host  │   │
+│                        └───────┬──────────────────────┬───────────┘   │
+│                                │                      │               │
+│                     @apphub/storage             本地数据目录            │
+│                     local/local-host/           (安装记录/缓存/密文)    │
+│                     ftp-http/s3                                         │
+└────────────────────────────────┼──────────────────────────────────────┘
+                                 │ FTP / S3 / 本地目录写
+                                 ▼
+              ┌────────── 频道所有者的存储（去中心化）──────────┐
+              │  app_repo/                                     │
+              │    channel.json                                │
+              │    <appId>/app.meta.json                       │
+              │    <appId>/<version>/files.json                │
+              │    <appId>/<version>/...文件或 zip             │
+              └────────────────────────────────────────────────┘
+                                 │ nginx / 静态服务 / 内置 Host HTTP GET
+                                 ▼
+                        所有订阅者（下载/更新）
+```
+
 ## 2. 仓库结构（monorepo）
 
 ```
@@ -290,7 +319,7 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 - [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（550 个 Vitest 用例，0 skipped）；
 - [x] `pnpm build` 产出 `out/`，`pnpm dev` 可启动应用；`pnpm package` 产出 `apps/desktop/release/win-unpacked/AppHub.exe`；
 - [x] 演示脚本 `pnpm demo` 在 FTP+nginx 模拟环境与本机 Host 环境下完成创建/发布/订阅/安装/更新/启停验证；
-- [x] README 的 Quickstart 与截图一致；
+- [x] README 的快速开始与 [SCREENSHOTS.md](./SCREENSHOTS.md) 截图一致；
 - [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5；Phase 5 本机 Host R48–R59、Phase 6 默认 local-host/端口避让/数据目录 R60–R64、Phase 7 AppHubData 隔离/环境变量/旧版迁移 R65–R69、Phase 9 双实例真实链路 R70–R74、Phase 10 自动更新 R75–R80）；
 - [x] docs/PROTOCOL.md、STORAGE.md、TESTING.md 完整；
 - [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 19/19，覆盖本机 Host 启停/URL 可达、端口避让、数据目录、双实例发布→订阅→下载安装→更新、自动更新 unsupported 态）。
