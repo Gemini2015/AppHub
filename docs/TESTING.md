@@ -812,6 +812,16 @@ env/default/custom 断言按 AppHubData 新语义更新）；desktop 单测由 2
 > 没有为了"变绿"而 skip 任何计划内用例；Phase 7 的 5 个数据目录 E2E 均真实执行（含旧版 move 迁移）。
 > "点击更改数据目录"的对话框/重启部分明确列为手工（M28–M34），不是静默跳过。
 
+### 12.6 发布工作流试跑（Phase 8，2026-10-28）
+
+| 项 | 结果 |
+| --- | --- |
+| 触发 | `workflow_dispatch`（master `faf8ead`） |
+| 结果 | ✅ Success，5m57s（Windows release job） |
+| 产物 | Actions artifact `apphub-windows-faf8ead…`，228 MB（包含 `AppHub-Setup-0.1.0.exe`、`AppHub-0.1.0-win-x64.zip`、`SHA256SUMS.txt`） |
+| Release | 按设计**未创建**（dispatch 仅构建）；正式发布由 `v0.1.0` tag 触发，待执行 |
+| 本地等价验证 | `pnpm package`（--dir）通过；`pnpm dist:win` 产出安装器/zip 并通过 zip 内 `AppHub.exe`、大小与 SHA-256 校验 |
+
 ---
 
 ## 13. 已知限制与边界

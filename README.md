@@ -124,6 +124,7 @@ pnpm demo           # 无需 GUI 的全链路演示：FTP+nginx 频道 + 本机 
 | `pnpm demo`（真实进程内 FTP + 静态 HTTP + 本机 Host） | ftp+nginx 全链路 + **local-host 创建→发布→启动 Host→订阅安装→停止/重启验证** 全部通过 |
 | `pnpm package`（electron-builder --dir） | `apps/desktop/release/win-unpacked/AppHub.exe` 生成成功 |
 | `pnpm dist:win`（NSIS 安装器 + zip） | `AppHub-Setup-0.1.0.exe`（约 94 MB）、`AppHub-0.1.0-win-x64.zip`（约 134 MB）生成成功，zip 内含 `AppHub.exe` |
+| `release` workflow（`workflow_dispatch` 试跑） | Success：5m57s，Actions artifact 228 MB（安装器 + zip + 校验和） |
 | 环境 | Windows / Node 22.23 / pnpm 11.22 / Electron 38.8 / 完全离线 |
 
 > 测试分层、需求覆盖矩阵（R1–R69）、手工验收清单（M1–M34，需要真实 ftp+nginx/MinIO/两台设备局域网/三平台实机/数据目录真实迁移）与 CI 配置见 [docs/TESTING.md](./docs/TESTING.md)。
