@@ -287,13 +287,13 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 
 ## 9. 交付验收清单
 
-- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（518 个 Vitest 用例，0 skipped）；
+- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（550 个 Vitest 用例，0 skipped）；
 - [x] `pnpm build` 产出 `out/`，`pnpm dev` 可启动应用；`pnpm package` 产出 `apps/desktop/release/win-unpacked/AppHub.exe`；
 - [x] 演示脚本 `pnpm demo` 在 FTP+nginx 模拟环境与本机 Host 环境下完成创建/发布/订阅/安装/更新/启停验证；
 - [x] README 的 Quickstart 与截图一致；
-- [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5；Phase 5 本机 Host R48–R59、Phase 6 默认 local-host/端口避让/数据目录 R60–R64、Phase 7 AppHubData 隔离/环境变量/旧版迁移 R65–R69、Phase 9 双实例真实链路 R70–R74）；
+- [x] 需求中的每一条功能都能在 UI 或 API 中找到对应实现（覆盖矩阵见 TESTING.md §5；Phase 5 本机 Host R48–R59、Phase 6 默认 local-host/端口避让/数据目录 R60–R64、Phase 7 AppHubData 隔离/环境变量/旧版迁移 R65–R69、Phase 9 双实例真实链路 R70–R74、Phase 10 自动更新 R75–R80）；
 - [x] docs/PROTOCOL.md、STORAGE.md、TESTING.md 完整；
-- [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 18/18，覆盖本机 Host 启停/URL 可达、端口避让、数据目录、双实例发布→订阅→下载安装→更新）。
+- [x] `pnpm verify:e2e` 一键验收 14/14 步通过（含真实 Electron E2E 19/19，覆盖本机 Host 启停/URL 可达、端口避让、数据目录、双实例发布→订阅→下载安装→更新、自动更新 unsupported 态）。
 
 ## 10. 构建与发布（CI/CD）
 
@@ -315,6 +315,7 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 - `pnpm dist:win`：`electron-builder --win nsis zip --publish never`，产出
   - `AppHub-Setup-<version>.exe`（NSIS 安装器，x64，可选择安装目录）
   - `AppHub-<version>-win-x64.zip`（免安装版，解压运行 `AppHub.exe`）
+  - `latest.yml` + `AppHub-Setup-<version>.exe.blockmap`（electron-updater 自动更新元数据）
   - `SHA256SUMS.txt`（工作流生成）
 - Linux/macOS 构建配置保留在 electron-builder 中，但当前 release 工作流只发布 Windows x64；
 - 当前不配置 Windows 代码签名，工作流不读取签名 secrets，也不做 SmartScreen 相关处理。
@@ -323,7 +324,7 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 
 1. tag 触发 release 工作流；`actions/checkout` 取完整历史，`pnpm install --frozen-lockfile`；
 2. 版本校验 → `pnpm verify:e2e` → `pnpm dist:win`；
-3. PowerShell 校验安装器/zip 存在、大小合理、zip 内包含 `AppHub.exe`，并生成 SHA-256 清单；
+3. PowerShell 校验安装器/zip 存在且大小合理、zip 内包含 `AppHub.exe`；校验 `latest.yml`（版本/path/sha512 与安装器一致）、blockmap 与 `resources/app-update.yml`，生成 SHA-256 清单；
 4. 上传 Actions artifact（保留 14 天）；
 5. tag 构建时用 `gh release create`/`gh release upload --clobber` 创建或补传 Release 资产；
    已存在同名 Release 时只补传资产，支持重跑；tag 含 `-` 时自动标记 prerelease。
@@ -334,4 +335,44 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
   Settings → Actions → General → Workflow permissions 允许 read/write；
 - NSIS/electron-builder 工具下载失败、产物缺失或校验失败时 job 失败，不会发布残缺 Release；
 - 手动 dispatch 仅上传 artifact，不创建 Release，用于发布前试跑。
+
+## 11. 应用内自动更新（electron-updater）
+
+**范围**：仅 Windows x64 **NSIS 安装版**；Linux/macOS 暂不支持；zip 免安装版不保证自动更新。
+
+**主进程状态机（`src/main/updater.ts`）**
+
+- 注入式 `UpdaterAdapter` 与 `electron-updater` 解耦，主进程不直接依赖更新器实现；
+- 状态：`unsupported / idle / checking / available / downloading / downloaded / installing / up-to-date / error`；
+- 启动延迟 10 秒自动检查，之后每 6 小时一次；设置页可手动检查；
+- **非强制**：`autoDownload=false`、`autoInstallOnAppQuit=false`；只有用户点击“下载更新/重启并安装”才执行；
+- 自动检查失败只写日志（不打扰用户）；手动检查失败在设置页/弹窗展示可读错误；
+- 「稍后」仅本次会话隐藏 Banner，不改变更新状态。
+
+**IPC / 渲染层**
+
+- 新增 `apphub:updates:*` channels 与 `apphub:event:updates-changed` 事件；
+- `UpdateStateDTO` 包含支持状态/原因、状态机、版本、release notes（纯文本）、进度、错误、最近检查时间、dismissed；
+- 渲染层 `UpdateProvider` 统一管理状态与动作；`UpdateBanner` 非阻塞提示；`UpdateDialog` 展示 release notes/进度/下载/安装；设置页「软件更新」卡片提供手动检查；
+- release notes 只按纯文本 `<pre>` 渲染，不解析 HTML。
+
+**支持条件**
+
+`process.platform === 'win32' && app.isPackaged && APPHUB_E2E !== '1'`；另支持 `APPHUB_UPDATE_DISABLED=1` 显式禁用用于诊断。开发模式/非 Windows/测试环境返回 `unsupported`，不发起网络请求。
+
+**发布元数据**
+
+- `electron-builder` 配置 GitHub provider（`owner=Gemini2015, repo=AppHub, releaseType=release`），`pnpm dist:win` 自动生成：
+  - `latest.yml`（版本、安装器路径、sha512、releaseDate）
+  - `AppHub-Setup-<version>.exe.blockmap`（差分更新）
+  - 打包内 `resources/app-update.yml`
+- `release.yml` 必须校验并上传 `latest.yml` 与 blockmap；否则更新器无法工作；
+- 只使用 GitHub 官方仓库作为更新源，不允许运行时任意 URL；`allowPrerelease=false`，预发布版本不会被自动选中；
+- 当前不配置 Windows 代码签名：更新包完整性依赖 `latest.yml` 的 sha512，但没有发布者签名信任；SmartScreen 相关处理不在范围内。
+
+**升级路径**
+
+- v0.1.x 不含更新器，用户必须手动安装首个带更新器的版本；
+- 之后版本可由用户在 App 内自主下载/安装；
+- 发布仍由维护者主动推 tag 触发，不存在自动发布逻辑。
 

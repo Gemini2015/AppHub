@@ -46,6 +46,7 @@ import {
   type SystemInfoDTO,
   type UpdateAppMetaRequestDTO,
   type UpdateCheckDTO,
+  type UpdateStateDTO,
   type VerifyResultDTO,
 } from '../../shared/ipc';
 import {
@@ -109,6 +110,15 @@ export type IpcHandler = (event: IpcEventLike, payload: unknown) => Promise<{ ok
 
 export type IpcRouter = Record<string, IpcHandler>;
 
+/** 自动更新管理器在 IPC 层的最小接口（index.ts 注入 UpdateManager）。 */
+export interface UpdaterIpcLike {
+  getState(): UpdateStateDTO;
+  check(): Promise<UpdateStateDTO>;
+  download(): Promise<UpdateStateDTO>;
+  install(): Promise<void>;
+  dismiss(): UpdateStateDTO;
+}
+
 export interface IpcRouterContext {
   logger: Logger;
   coreManager: Pick<CoreManager, 'dataDir' | 'getCore'> & Partial<Pick<CoreManager, 'getInitError'>>;
@@ -140,6 +150,11 @@ export interface IpcRouterContext {
    * 缺省（如 env 固定或测试未注入）时 handler 返回 UNSUPPORTED。
    */
   changeDataDir?: (newPath: string) => Promise<ChangeDataDirResultDTO>;
+  /**
+   * 自动更新管理器（index.ts 注入；缺省时 updates 相关 IPC 返回 UNSUPPORTED，
+   * 便于测试与不支持自动更新的构建优雅降级）。
+   */
+  updater?: UpdaterIpcLike;
 }
 
 const MAX_PRIVATE_CONFIG_BYTES = 2 * 1024 * 1024;
@@ -466,6 +481,13 @@ export function createIpcRouter(ctx: IpcRouterContext): Record<string, IpcHandle
     return ctx.coreManager.getCore();
   }
 
+  function requireUpdater(): UpdaterIpcLike {
+    if (!ctx.updater) {
+      throw new AppError('UNSUPPORTED', '当前构建不支持应用内自动更新');
+    }
+    return ctx.updater;
+  }
+
   async function readSystemCounts(): Promise<{ channelCount: number; installedCount: number }> {
     try {
       const core = await getCore();
@@ -572,6 +594,29 @@ export function createIpcRouter(ctx: IpcRouterContext): Record<string, IpcHandle
         return ctx.changeDataDir(payload.path);
       },
     ),
+
+    // -----------------------------------------------------------------------
+    // updates（应用内自动更新；状态变化通过 IPC_EVENTS.updatesChanged 广播）
+    // -----------------------------------------------------------------------
+    [IPC_CHANNELS.updatesState]: handle(IPC_CHANNELS.updatesState, EmptySchema, async () => {
+      return requireUpdater().getState();
+    }),
+
+    [IPC_CHANNELS.updatesCheck]: handle(IPC_CHANNELS.updatesCheck, EmptySchema, async () => {
+      return requireUpdater().check();
+    }),
+
+    [IPC_CHANNELS.updatesDownload]: handle(IPC_CHANNELS.updatesDownload, EmptySchema, async () => {
+      return requireUpdater().download();
+    }),
+
+    [IPC_CHANNELS.updatesInstall]: handle(IPC_CHANNELS.updatesInstall, EmptySchema, async () => {
+      await requireUpdater().install();
+    }),
+
+    [IPC_CHANNELS.updatesDismiss]: handle(IPC_CHANNELS.updatesDismiss, EmptySchema, async () => {
+      return requireUpdater().dismiss();
+    }),
 
     // -----------------------------------------------------------------------
     // channels

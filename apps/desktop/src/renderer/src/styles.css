@@ -2192,6 +2192,180 @@ a {
 }
 
 /* =========================================================================
+   自动更新（Banner / 弹窗 / 设置卡片）
+   ========================================================================= */
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin: 14px 28px -6px;
+  padding: 11px 14px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(110, 168, 254, 0.32);
+  background: linear-gradient(90deg, rgba(110, 168, 254, 0.14), rgba(167, 139, 250, 0.1));
+  box-shadow: var(--shadow-soft);
+}
+
+.update-banner-icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid rgba(110, 168, 254, 0.24);
+}
+
+.update-banner-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.update-banner-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.update-banner-text span {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.update-banner-progress {
+  display: block;
+  height: 4px;
+  max-width: 320px;
+  margin-top: 2px;
+  border-radius: 999px;
+  background: rgba(8, 11, 20, 0.6);
+  overflow: hidden;
+}
+
+.update-banner-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-strong), var(--purple));
+  transition: width 0.2s ease;
+}
+
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.update-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.update-version-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.update-version-arrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+}
+
+.update-release-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.update-notes-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.update-notes-wrap h3 {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.update-notes {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(5, 8, 15, 0.7);
+  color: #b9c8e6;
+  font-size: 11.5px;
+  line-height: 1.7;
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.update-notes-preview {
+  max-height: 120px;
+}
+
+.update-card-body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.update-card-main {
+  flex: 1;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.update-card-actions {
+  flex-shrink: 0;
+  align-items: flex-start;
+}
+
+.update-card-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.update-card-progress .progress-track {
+  height: 6px;
+}
+
+@media (max-width: 880px) {
+  .update-banner {
+    margin: 10px 16px -2px;
+    flex-wrap: wrap;
+  }
+  .update-banner-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+/* =========================================================================
    设置 / 关于
    ========================================================================= */
 

@@ -6,8 +6,10 @@ import { Icon } from '../components/Icon';
 import { ConfirmDialog } from '../components/Modal';
 import { ErrorState, LoadingState, PageHeader } from '../components/StateViews';
 import { useToast } from '../components/Toast';
+import { useUpdate } from '../components/UpdateProvider';
 import { useAsyncData } from '../hooks/useAsyncData';
-import type { ApiError, DataDirSource, SystemInfoDTO } from '../types';
+import { formatDateTime } from '../format';
+import type { ApiError, DataDirSource, SystemInfoDTO, UpdateStateDTO, UpdateStatus } from '../types';
 
 export interface SettingsViewProps {
   dataVersion: number;
@@ -45,12 +47,49 @@ function dataDirSourceLabel(source: DataDirSource): string {
   }
 }
 
+const UPDATE_STATUS_LABEL: Record<UpdateStatus, string> = {
+  unsupported: '当前环境不支持自动更新',
+  idle: '未检查',
+  checking: '正在检查更新…',
+  available: '发现新版本',
+  downloading: '正在下载更新…',
+  downloaded: '更新已下载，等待重启安装',
+  installing: '正在重启并安装更新…',
+  'up-to-date': '已是最新版本',
+  error: '更新失败',
+};
+
+const UNSUPPORTED_REASON_LABEL: Record<NonNullable<UpdateStateDTO['unsupportedReason']>, string> = {
+  dev: '开发模式（未打包）不支持自动更新',
+  platform: '当前平台不支持自动更新（仅 Windows 安装版）',
+  e2e: 'E2E 测试模式下自动更新已禁用',
+  env: '环境变量禁用了自动更新',
+};
+
 /** 设置 / 关于：版本信息、运行环境、数据目录（可迁移）、去中心化说明。 */
 export function SettingsView({ dataVersion }: SettingsViewProps) {
   const api = useApi();
   const toast = useToast();
+  const update = useUpdate();
   const state = useAsyncData<SystemInfoDTO>(() => api.system.info(), dataVersion);
   const info = state.data;
+  const updateState = update.state;
+  const updateSupported = updateState ? updateState.supported : true;
+  const updateError = update.error ?? updateState?.error ?? null;
+  const updateStatusLabel = updateState
+    ? UPDATE_STATUS_LABEL[updateState.status]
+    : '正在读取更新状态…';
+  const unsupportedReasonText =
+    updateState && !updateState.supported
+      ? (UNSUPPORTED_REASON_LABEL[updateState.unsupportedReason ?? 'env'] ??
+        '当前环境不支持自动更新')
+      : null;
+  const updateCheckDisabled =
+    !updateSupported ||
+    update.loading ||
+    update.busy !== null ||
+    updateState?.status === 'downloading' ||
+    updateState?.status === 'installing';
 
   /** 已选择、等待确认的新数据目录。 */
   const [changeTarget, setChangeTarget] = useState<string | null>(null);
@@ -206,6 +245,116 @@ export function SettingsView({ dataVersion }: SettingsViewProps) {
             ) : null}
             <p className="field-hint">
               频道记录、加密的 channel_pri.json、本地库索引与安装文件都保存在数据目录，不经过任何中心服务器。
+            </p>
+          </section>
+
+          <section className="card settings-card settings-card-wide">
+            <h2>
+              <Icon name="refresh" size={18} />
+              软件更新
+            </h2>
+            <div className="update-card-body">
+              <div className="update-card-main">
+                <div className="info-list">
+                  <InfoRow
+                    label="当前版本"
+                    value={`v${updateState ? updateState.currentVersion : info.appVersion}`}
+                    mono
+                  />
+                  <InfoRow label="更新状态" value={updateStatusLabel} testId="update-status" />
+                  {updateState?.availableVersion ? (
+                    <InfoRow label="可用版本" value={`v${updateState.availableVersion}`} mono />
+                  ) : null}
+                  {updateState?.lastCheckedAt ? (
+                    <InfoRow label="最近检查" value={formatDateTime(updateState.lastCheckedAt)} />
+                  ) : null}
+                </div>
+
+                {unsupportedReasonText ? (
+                  <InfoBanner tone="info" title="当前环境不支持自动更新">
+                    {unsupportedReasonText}；不会发起更新检查网络请求。
+                  </InfoBanner>
+                ) : null}
+
+                {updateState?.releaseNotes ? (
+                  <div className="update-notes-wrap">
+                    <h3>更新说明</h3>
+                    <pre className="update-notes update-notes-preview">{updateState.releaseNotes}</pre>
+                  </div>
+                ) : null}
+
+                {updateState?.status === 'downloading' && updateState.progress ? (
+                  <div className="update-card-progress" data-testid="settings-update-progress">
+                    <span>正在下载：{Math.round(updateState.progress.percent)}%</span>
+                    <span className="progress-track">
+                      <span
+                        className="progress-fill"
+                        style={{
+                          width: `${Math.max(0, Math.min(100, updateState.progress.percent))}%`,
+                        }}
+                      />
+                    </span>
+                  </div>
+                ) : null}
+
+                {updateError ? (
+                  <div data-testid="settings-update-error">
+                    <ApiErrorBanner error={updateError} title="更新失败" />
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="settings-actions update-card-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  data-testid="update-check-button"
+                  onClick={() => void update.check()}
+                  disabled={updateCheckDisabled}
+                >
+                  <Icon name="refresh" size={16} />
+                  {update.busy === 'check' || updateState?.status === 'checking'
+                    ? '检查中…'
+                    : '检查更新'}
+                </button>
+                {updateState?.status === 'available' ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    data-testid="settings-update-download-button"
+                    onClick={() => void update.download()}
+                    disabled={update.busy !== null}
+                  >
+                    <Icon name="download" size={16} />
+                    {update.busy === 'download' ? '开始下载…' : '下载更新'}
+                  </button>
+                ) : null}
+                {updateState?.status === 'downloaded' ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    data-testid="settings-update-install-button"
+                    onClick={() => void update.install()}
+                    disabled={update.busy !== null}
+                  >
+                    <Icon name="refresh" size={16} />
+                    {update.busy === 'install' ? '正在重启…' : '重启并安装'}
+                  </button>
+                ) : null}
+                {updateState &&
+                (updateState.status === 'available' ||
+                  updateState.status === 'downloaded' ||
+                  updateState.status === 'downloading' ||
+                  updateState.status === 'error') ? (
+                  <button type="button" className="btn btn-ghost" onClick={update.openDialog}>
+                    <Icon name="info" size={16} />
+                    查看详情
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <p className="field-hint">
+              更新为非强制：仅在你有空时下载/安装；「稍后」只隐藏提示，不会改变更新状态或影响 App 使用。
             </p>
           </section>
 

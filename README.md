@@ -109,17 +109,31 @@ pnpm demo           # 无需 GUI 的全链路演示：FTP+nginx 频道 + 本机 
 | --- | --- |
 | `AppHub-Setup-<版本>.exe` | NSIS 安装器（x64）；可选择安装目录，安装后创建开始菜单/桌面快捷方式和卸载项 |
 | `AppHub-<版本>-win-x64.zip` | 免安装版；解压到任意目录后运行 `AppHub.exe` |
+| `latest.yml` / `*.blockmap` | electron-updater 自动更新元数据（仅安装版使用；不要手动修改） |
 | `SHA256SUMS.txt` | 上述产物的 SHA-256 校验值 |
 
 系统要求：Windows 10/11 x64。安装版与免安装版使用同一个 AppHub 数据目录（默认 `<Electron userData>/AppHubData`）。
+
+## 应用内更新
+
+从**首个带自动更新能力的版本**开始，Windows 安装版会在启动后自动检查 GitHub Releases 的最新正式版（当前已发布的 v0.1.1 还不包含更新器，需先手动安装一次带更新器的版本）：
+
+- 发现新版本时显示非阻塞提示条，不会强制更新；
+- 可点「查看更新」查看版本与 Release notes，选择「下载更新」或「稍后」；
+- 下载完成后由用户选择「重启并安装」，App 重启后生效；
+- 设置 / 关于 →「软件更新」提供手动检查、状态、进度和重试；
+- 启动后自动检查失败只写日志，不弹出错误；离线时 App 正常使用；
+- 自动更新只支持 Windows NSIS 安装版；zip 免安装版和开发模式不检查更新。
+
+> 更新包完整性由 `latest.yml` 中的 sha512 校验；当前发布未做代码签名（与「不处理 SmartScreen」的既定策略一致）。
 
 ## 验收结果（本机实测，2026-10-27，含本机 Host 与数据目录设置）
 
 | 项目 | 结果 |
 | --- | --- |
-| `pnpm verify:e2e`（6 包 test + 6 包 typecheck + build + E2E） | **14/14 步通过，PASS（近期 ~90–143s）** |
-| Vitest 单元/集成测试 | **518 个用例，0 skipped**（protocol 27 / storage 56 / core 123 / 集成 39 / desktop 273） |
-| Electron E2E（Playwright + 真实 Electron） | **18/18 通过**（启动、订阅→安装→校验→卸载、错误处理、创建/发布向导、本机 Host 创建/启停/URL 可达/私密能力链接、默认 local-host、端口自动避让、数据目录三来源/旧版迁移、**双实例发布→订阅→下载安装→更新**） |
+| `pnpm verify:e2e`（6 包 test + 6 包 typecheck + build + E2E） | **14/14 步通过，PASS（近期 ~94–143s）** |
+| Vitest 单元/集成测试 | **550 个用例，0 skipped**（protocol 27 / storage 56 / core 123 / 集成 39 / desktop 305） |
+| Electron E2E（Playwright + 真实 Electron） | **19/19 通过**（启动、订阅→安装→校验→卸载、错误处理、创建/发布向导、本机 Host 创建/启停/URL 可达/私密能力链接、默认 local-host、端口自动避让、数据目录三来源/旧版迁移、**双实例发布→订阅→下载安装→更新**、E2E 环境自动更新不支持态） |
 | `@apphub/core` 覆盖率（v8，含 HostServer） | statements 85.9% / branches 77.8% / functions 92.1% |
 | `pnpm demo`（真实进程内 FTP + 静态 HTTP + 本机 Host） | ftp+nginx 全链路 + **local-host 创建→发布→启动 Host→订阅安装→停止/重启验证** 全部通过 |
 | `pnpm package`（electron-builder --dir） | `apps/desktop/release/win-unpacked/AppHub.exe` 生成成功 |
@@ -128,7 +142,7 @@ pnpm demo           # 无需 GUI 的全链路演示：FTP+nginx 频道 + 本机 
 | GitHub Release `v0.1.0`（tag 自动发布） | ✅ 已发布 `AppHub-Setup-0.1.0.exe`（94.2 MB）、`AppHub-0.1.0-win-x64.zip`（133.9 MB）、`SHA256SUMS.txt`；release job 5m29s |
 | 环境 | Windows / Node 22.23 / pnpm 11.22 / Electron 38.8 / 完全离线 |
 
-> 测试分层、需求覆盖矩阵（R1–R69）、手工验收清单（M1–M34，需要真实 ftp+nginx/MinIO/两台设备局域网/三平台实机/数据目录真实迁移）与 CI 配置见 [docs/TESTING.md](./docs/TESTING.md)。
+> 测试分层、需求覆盖矩阵（R1–R80）、手工验收清单（M1–M36，需要真实 ftp+nginx/MinIO/两台设备局域网/三平台实机/数据目录真实迁移/真实自动更新）与 CI 配置见 [docs/TESTING.md](./docs/TESTING.md)。
 
 ## 使用指南
 
@@ -255,7 +269,9 @@ git tag v0.1.1
 git push origin master v0.1.1
 ```
 
-`release.yml` 会校验标签与版本号一致（`v<version>`），执行 `pnpm verify:e2e`、`pnpm dist:win`，并把 `AppHub-Setup-<version>.exe`、`AppHub-<version>-win-x64.zip`、`SHA256SUMS.txt` 上传到 GitHub Release。也可以手动触发 `release` workflow 做构建试跑（只上传 Actions artifact，不发布 Release）。
+`release.yml` 会校验标签与版本号一致（`v<version>`），执行 `pnpm verify:e2e`、`pnpm dist:win`，并把 `AppHub-Setup-<version>.exe`、`AppHub-<version>-win-x64.zip`、`latest.yml`、`AppHub-Setup-<version>.exe.blockmap`、`SHA256SUMS.txt` 上传到 GitHub Release。也可以手动触发 `release` workflow 做构建试跑（只上传 Actions artifact，不发布 Release）。
+
+> 自动更新依赖 Release 中的 `latest.yml` 与 blockmap；缺少这两个资产时旧版本无法自动更新。首个带更新器的版本仍需用户手动安装一次；之后的正式版本可由用户在 App 内自行更新。
 
 ### 修复历史重复 App（v0.1.0 已知问题）
 

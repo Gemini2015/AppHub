@@ -31,6 +31,12 @@ export const IPC_CHANNELS = {
   systemPickDirectory: 'apphub:system:pick-directory',
   systemChangeDataDir: 'apphub:system:change-data-dir',
 
+  updatesState: 'apphub:updates:state',
+  updatesCheck: 'apphub:updates:check',
+  updatesDownload: 'apphub:updates:download',
+  updatesInstall: 'apphub:updates:install',
+  updatesDismiss: 'apphub:updates:dismiss',
+
   channelsList: 'apphub:channels:list',
   channelsGet: 'apphub:channels:get',
   channelsCreate: 'apphub:channels:create',
@@ -69,6 +75,7 @@ export const IPC_CHANNELS = {
 export const IPC_EVENTS = {
   progress: 'apphub:event:progress',
   dataChanged: 'apphub:event:data-changed',
+  updatesChanged: 'apphub:event:updates-changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -411,6 +418,47 @@ export interface DataChangedEventDTO {
   appId?: string;
 }
 
+// ---------------------------------------------------------------------------
+// 应用自动更新 DTO
+// ---------------------------------------------------------------------------
+
+export type UpdateStatus =
+  | 'unsupported'
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'installing'
+  | 'up-to-date'
+  | 'error';
+
+export interface UpdateProgressDTO {
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
+}
+
+export interface UpdateStateDTO {
+  /** 当前运行环境是否支持自动更新（打包的 Windows 安装版）。 */
+  supported: boolean;
+  /** 不支持时的稳定原因码：dev / platform / e2e / env。 */
+  unsupportedReason?: 'dev' | 'platform' | 'e2e' | 'env';
+  status: UpdateStatus;
+  currentVersion: string;
+  availableVersion?: string;
+  releaseName?: string;
+  /** GitHub Release notes 纯文本；渲染进程不得按 HTML 解析。 */
+  releaseNotes?: string;
+  releaseDate?: string;
+  progress?: UpdateProgressDTO;
+  error?: ApiError;
+  lastCheckedAt?: string;
+  /** 用户在本次会话选择了「稍后」，仅影响 Banner 展示。 */
+  dismissed?: boolean;
+}
+
 export type Unsubscribe = () => void;
 
 // ---------------------------------------------------------------------------
@@ -465,8 +513,18 @@ export interface AppHubApi {
     launch(input: VerifyRequestDTO): Promise<ApiResult<LaunchResultDTO>>;
     reveal(input: VerifyRequestDTO): Promise<ApiResult<void>>;
   };
+  updates: {
+    state(): Promise<ApiResult<UpdateStateDTO>>;
+    check(): Promise<ApiResult<UpdateStateDTO>>;
+    download(): Promise<ApiResult<UpdateStateDTO>>;
+    /** 退出并安装已下载更新；成功时 App 会立即重启，调用通常不会返回。 */
+    install(): Promise<ApiResult<void>>;
+    /** 本次会话稍后提醒（隐藏 Banner，不改变更新状态）。 */
+    dismiss(): Promise<ApiResult<UpdateStateDTO>>;
+  };
   events: {
     onProgress(handler: (event: ProgressEventDTO) => void): Unsubscribe;
     onDataChanged(handler: (event: DataChangedEventDTO) => void): Unsubscribe;
+    onUpdateState(handler: (event: UpdateStateDTO) => void): Unsubscribe;
   };
 }

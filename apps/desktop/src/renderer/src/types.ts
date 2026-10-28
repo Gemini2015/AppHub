@@ -50,6 +50,9 @@ export type {
   UpdateCheckDTO,
   UpdateChannelRequestDTO,
   UpdateHostConfigRequestDTO,
+  UpdateProgressDTO,
+  UpdateStateDTO,
+  UpdateStatus,
   VerifyRequestDTO,
   VerifyResultDTO,
 } from '../../../shared/ipc';

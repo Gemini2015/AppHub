@@ -6,6 +6,9 @@ import { Icon } from './components/Icon';
 import { ProgressProvider } from './components/Progress';
 import { Sidebar } from './components/Sidebar';
 import { ToastProvider, useToast } from './components/Toast';
+import { UpdateBanner } from './components/UpdateBanner';
+import { UpdateDialog } from './components/UpdateDialog';
+import { UpdateProvider } from './components/UpdateProvider';
 import type { Route } from './routes';
 import type {
   ApiError,
@@ -189,6 +192,7 @@ function AppShell() {
         onNavigate={navigate}
       />
       <main className="app-main">
+        <UpdateBanner />
         <div className="page-wrap">{content}</div>
       </main>
 
@@ -213,6 +217,8 @@ function AppShell() {
           }}
         />
       ) : null}
+
+      <UpdateDialog />
     </div>
   );
 }
@@ -226,7 +232,9 @@ export function App({ api }: AppProps = {}) {
     <ApiProvider api={resolved}>
       <ToastProvider>
         <ProgressProvider>
-          <AppShell />
+          <UpdateProvider>
+            <AppShell />
+          </UpdateProvider>
         </ProgressProvider>
       </ToastProvider>
     </ApiProvider>

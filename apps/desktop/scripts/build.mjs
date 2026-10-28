@@ -56,8 +56,9 @@ function nodeBundleOptions({ entry, outfile, mode, plugins }) {
     platform: 'node',
     format: 'cjs',
     target: 'node22',
-    // Electron 由运行时提供；其余（含 workspace TS 源码与第三方依赖）全部打进 bundle。
-    external: ['electron'],
+    // Electron 由运行时提供；electron-updater 由 electron-builder 放入 app 的 node_modules
+    // （主进程 bundle 不内联它，避免与 electron-builder 生成的 app-update.yml 配置冲突）。
+    external: ['electron', 'electron-updater'],
     sourcemap: 'linked',
     legalComments: 'none',
     logLevel: 'warning',

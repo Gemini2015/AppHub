@@ -13,6 +13,7 @@ import {
   writeDataDirConfig,
 } from './data-dir';
 import type { DataDirInfo } from './data-dir';
+import { createElectronUpdaterAdapter } from './electron-updater-adapter';
 import { registerIpcHandlers } from './ipc';
 import type { IpcSenderLike } from './ipc';
 import { createLogger } from './logger';
@@ -21,8 +22,11 @@ import { createSecretBox } from './secret-box';
 import { createE2ESelectionDialog, SelectionRegistry } from './selection-registry';
 import { createSenderPolicy } from './sender';
 import type { SenderPolicy } from './sender';
+import { UpdateManager } from './updater';
+import type { UnsupportedUpdateReason } from './updater';
 import { createMainWindow } from './window';
-import type { ChangeDataDirResultDTO } from '../../shared/ipc';
+import { IPC_EVENTS } from '../../shared/ipc';
+import type { ChangeDataDirResultDTO, UpdateStateDTO } from '../../shared/ipc';
 
 /**
  * Electron 主进程入口。
@@ -63,6 +67,7 @@ let logger: AppHubLogger | null = null;
 let coreManager: CoreManager | null = null;
 let selectionRegistry: SelectionRegistry | null = null;
 let senderPolicy: SenderPolicy | null = null;
+let updateManager: UpdateManager | null = null;
 let disposeIpc: (() => void) | null = null;
 let quitting = false;
 let booted = false;
@@ -228,6 +233,29 @@ async function bootstrap(): Promise<void> {
     editable: resolvedDataDir.editable,
   };
 
+  // 应用内自动更新（仅打包的 Windows 安装版；E2E/开发/其他平台标记 unsupported）
+  const updateSupport = resolveUpdateSupport();
+  const updaterAdapter = updateSupport.supported
+    ? createElectronUpdaterAdapter({ logger, currentVersion: app.getVersion() })
+    : null;
+  updateManager = new UpdateManager({
+    adapter: updaterAdapter,
+    logger,
+    currentVersion: app.getVersion(),
+    supported: updateSupport.supported,
+    unsupportedReason: updateSupport.reason,
+    onStateChange: broadcastUpdateState,
+    onBeforeInstall: () => {
+      // quitAndInstall 接管退出：设置 quitting 让 before-quit 直接放行，避免 preventDefault 与安装器竞争
+      quitting = true;
+    },
+  });
+  logger.info('自动更新配置', {
+    supported: updateSupport.supported,
+    unsupportedReason: updateSupport.reason ?? null,
+    currentVersion: app.getVersion(),
+  });
+
   disposeIpc = registerIpcHandlers({
     ctx: {
       logger,
@@ -235,6 +263,7 @@ async function bootstrap(): Promise<void> {
       selectionRegistry,
       senderPolicy,
       dataDirInfo,
+      updater: updateManager,
       changeDataDir: (newPath) =>
         changeAppDataDir(
           {
@@ -253,6 +282,7 @@ async function bootstrap(): Promise<void> {
 
   booted = true;
   openMainWindow(preloadFile, rendererIndexFile);
+  updateManager.start();
   logger.info('主进程初始化完成', {
     devServerUrl: DEV_SERVER_URL ?? '(file://)',
     rendererIndexFile,
@@ -443,6 +473,27 @@ function withLog(action: () => void): void {
   }
 }
 
+/** 自动更新支持条件：打包的 Windows 安装版；E2E/dev/其他平台/显式禁用时标记 unsupported。 */
+function resolveUpdateSupport(): { supported: boolean; reason?: UnsupportedUpdateReason } {
+  if (process.env.APPHUB_E2E === '1') return { supported: false, reason: 'e2e' };
+  if (process.env.APPHUB_UPDATE_DISABLED === '1') return { supported: false, reason: 'env' };
+  if (process.platform !== 'win32') return { supported: false, reason: 'platform' };
+  if (!app.isPackaged) return { supported: false, reason: 'dev' };
+  return { supported: true };
+}
+
+/** 广播更新状态到所有窗口（IPC_EVENTS.updatesChanged）。 */
+function broadcastUpdateState(state: UpdateStateDTO): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    try {
+      window.webContents.send(IPC_EVENTS.updatesChanged, state);
+    } catch {
+      /* 窗口关闭竞态 */
+    }
+  }
+}
+
 function handleBeforeQuit(event: ElectronEvent): void {
   if (quitting) return;
   // 先阻止退出，等 core / 日志优雅关闭后再真正退出
@@ -452,6 +503,8 @@ function handleBeforeQuit(event: ElectronEvent): void {
     try {
       disposeIpc?.();
       disposeIpc = null;
+      updateManager?.dispose();
+      updateManager = null;
       selectionRegistry?.clear();
       await coreManager?.close();
       logger?.info('AppHub 退出');

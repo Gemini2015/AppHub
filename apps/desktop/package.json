@@ -22,6 +22,7 @@
     "@apphub/core": "workspace:*",
     "@apphub/protocol": "workspace:*",
     "@apphub/storage": "workspace:*",
+    "electron-updater": "^6.8.11",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "zod": "^3.25.76"
@@ -56,6 +57,14 @@
     "files": [
       "out/**/*",
       "package.json"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Gemini2015",
+        "repo": "AppHub",
+        "releaseType": "release"
+      }
     ],
     "win": {
       "icon": "build/icon.ico",

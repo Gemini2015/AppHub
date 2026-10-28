@@ -30,6 +30,7 @@ import type {
   UpdateChannelRequestDTO,
   UpdateCheckDTO,
   UpdateHostConfigRequestDTO,
+  UpdateStateDTO,
   VerifyRequestDTO,
   VerifyResultDTO,
 } from '../../shared/ipc';
@@ -119,11 +120,20 @@ const api: AppHubApi = {
     launch: (input: VerifyRequestDTO) => invoke<LaunchResultDTO>(IPC_CHANNELS.libraryLaunch, input),
     reveal: (input: VerifyRequestDTO) => invoke<void>(IPC_CHANNELS.libraryReveal, input),
   },
+  updates: {
+    state: () => invoke<UpdateStateDTO>(IPC_CHANNELS.updatesState),
+    check: () => invoke<UpdateStateDTO>(IPC_CHANNELS.updatesCheck),
+    download: () => invoke<UpdateStateDTO>(IPC_CHANNELS.updatesDownload),
+    install: () => invoke<void>(IPC_CHANNELS.updatesInstall),
+    dismiss: () => invoke<UpdateStateDTO>(IPC_CHANNELS.updatesDismiss),
+  },
   events: {
     onProgress: (handler: (event: ProgressEventDTO) => void) =>
       subscribe<ProgressEventDTO>(IPC_EVENTS.progress, handler),
     onDataChanged: (handler: (event: DataChangedEventDTO) => void) =>
       subscribe<DataChangedEventDTO>(IPC_EVENTS.dataChanged, handler),
+    onUpdateState: (handler: (event: UpdateStateDTO) => void) =>
+      subscribe<UpdateStateDTO>(IPC_EVENTS.updatesChanged, handler),
   },
 };
 
