@@ -18,7 +18,8 @@
     "typecheck": "pnpm -r --no-bail run typecheck",
     "verify": "node scripts/verify.mjs",
     "verify:e2e": "node scripts/verify.mjs --e2e",
-    "demo": "tsx scripts/demo.ts"
+    "demo": "tsx scripts/demo.ts",
+    "repair:duplicate-app": "tsx scripts/repair-duplicate-app.ts"
   },
   "devDependencies": {
     "@apphub/core": "workspace:*",

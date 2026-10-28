@@ -118,7 +118,7 @@ pnpm demo           # 无需 GUI 的全链路演示：FTP+nginx 频道 + 本机 
 | 项目 | 结果 |
 | --- | --- |
 | `pnpm verify:e2e`（6 包 test + 6 包 typecheck + build + E2E） | **14/14 步通过，PASS（近期 ~78–97s）** |
-| Vitest 单元/集成测试 | **504 个用例，0 skipped**（protocol 27 / storage 56 / core 118 / 集成 37 / desktop 266） |
+| Vitest 单元/集成测试 | **507 个用例，0 skipped**（protocol 27 / storage 56 / core 118 / 集成 39 / desktop 267） |
 | Electron E2E（Playwright + 真实 Electron） | **17/17 通过**（启动、订阅→安装→校验→卸载、错误处理、创建/发布向导、本机 Host 创建/启停/URL 可达/私密能力链接、默认 local-host、端口自动避让、数据目录 env/default/custom 三来源与旧版自动迁移） |
 | `@apphub/core` 覆盖率（v8，含 HostServer） | statements 85.9% / branches 77.4% / functions 92.3% |
 | `pnpm demo`（真实进程内 FTP + 静态 HTTP + 本机 Host） | ftp+nginx 全链路 + **local-host 创建→发布→启动 Host→订阅安装→停止/重启验证** 全部通过 |
@@ -256,6 +256,20 @@ git push origin master v0.1.1
 ```
 
 `release.yml` 会校验标签与版本号一致（`v<version>`），执行 `pnpm verify:e2e`、`pnpm dist:win`，并把 `AppHub-Setup-<version>.exe`、`AppHub-<version>-win-x64.zip`、`SHA256SUMS.txt` 上传到 GitHub Release。也可以手动触发 `release` workflow 做构建试跑（只上传 Actions artifact，不发布 Release）。
+
+### 修复历史重复 App（v0.1.0 已知问题）
+
+v0.1.0 的“发布新版本”没有把原 App 的 `appId` 传给主进程；当 `displayName` 与 `appId` 不一致时（例如 `appId=cpu_z`、`displayName=CPU-Z`），会按名称重新生成 `cpu-z`，导致 `channel.json` 出现两个 App。**该问题已修复**：新版本发布会始终携带原 `appId`（并有回归测试覆盖）。
+
+如果旧频道已经产生重复 App，可先停止该频道的 Host，再对**频道仓库目录**执行修复脚本（脚本会移动版本目录、合并元信息、更新 `channel.json`，并保留 `.repair-backup-*` 备份）：
+
+```bash
+# 先 dry-run 确认；<频道仓库目录> 为创建 local-host 频道时选择的目录
+pnpm repair:duplicate-app -- --root "<频道仓库目录>" --keep cpu_z --merge cpu-z --dry-run
+pnpm repair:duplicate-app -- --root "<频道仓库目录>" --keep cpu_z --merge cpu-z
+```
+
+修复后重启 Host，并在 AppHub 中刷新频道即可。建议保留 `--keep` 为最初创建 App 时使用的 appId（已安装 App 的更新连续性依赖它）。
 
 应用图标由 `scripts/generate-icons.py` 生成（Pillow），产物（`icon.png` / `icon.ico` / `icon.icns`）位于 `apps/desktop/build/`，electron-builder 打包时自动使用。
 

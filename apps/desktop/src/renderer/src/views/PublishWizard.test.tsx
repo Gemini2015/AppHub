@@ -6,6 +6,7 @@ import {
   createMockApi,
   fail,
   makeAppDetail,
+  makeAppMeta,
   makePublishResult,
   ok,
 } from '../../test/mock-api';
@@ -169,6 +170,35 @@ describe('发布向导', () => {
       ),
     );
     await waitFor(() => expect(onPublished).toHaveBeenCalled());
+  });
+
+  it('发布已有 App 的新版本时携带原始 appId（displayName 与 appId 不一致时不会生成新 App）', async () => {
+    const api = createMockApi();
+    // 复现实际回归：首个版本显式 appId=cpu_z，displayName=CPU-Z；
+    // 旧逻辑发布新版本时不传 appId，core 会按 displayName 重新 slugify 成 cpu-z，
+    // 导致 channel.json 中出现两个 App。
+    const existingApp = makeAppDetail({
+      meta: makeAppMeta({ appId: 'cpu_z', name: 'cpu_z', displayName: 'CPU-Z' }),
+    });
+    renderWizard(api, { app: existingApp });
+    const user = userEvent.setup();
+
+    await fillStep1(user, { version: '1.0.2' });
+    await pickFiles(user);
+    await user.click(screen.getByTestId('publish-next'));
+
+    expect(await screen.findByText('确认发布内容')).toBeInTheDocument();
+    await user.click(screen.getByTestId('publish-submit'));
+
+    await waitFor(() =>
+      expect(api.publish.start).toHaveBeenCalledWith(
+        expect.objectContaining({
+          appId: 'cpu_z',
+          displayName: 'CPU-Z',
+          version: '1.0.2',
+        }),
+      ),
+    );
   });
 
   it('发布失败时展示错误码与信息，且不回调 onPublished', async () => {

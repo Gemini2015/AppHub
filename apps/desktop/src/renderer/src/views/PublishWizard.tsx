@@ -211,7 +211,8 @@ export function PublishWizard({ channelId, channelName, app, onClose, onPublishe
       entry: entry.trim(),
       selectionId: selection?.selectionId ?? '',
     };
-    if (!isExisting && appIdInput.trim()) request.appId = appIdInput.trim();
+    if (isExisting && app) request.appId = app.meta.appId;
+    else if (!isExisting && appIdInput.trim()) request.appId = appIdInput.trim();
     if (description.trim()) request.description = description.trim();
     if (author.trim()) request.author = author.trim();
     if (homepage.trim()) request.homepage = homepage.trim();

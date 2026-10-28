@@ -40,8 +40,8 @@ pnpm build && pnpm test:e2e
 | 层 | 名称 | 范围 | 位置 | 运行方式 | 当前状态 |
 | --- | --- | --- | --- | --- | --- |
 | L0 | 协议单元 | zod schema、路径/URL/semver/错误码/序列化 | `packages/protocol/src/*.test.ts` | `pnpm --filter @apphub/protocol test` | ✅ 27 tests |
-| L1 | 包单元 | storage 四个适配器 + 工厂；core 频道/发布/安装/Host 引擎；desktop 主进程 IPC/安全/数据目录；renderer React 组件 | `packages/*/src/**/*.test.ts(x)`、`apps/desktop/src/**/*.test.ts(x)` | `pnpm -r test` / 各包 `pnpm --filter <pkg> test` | ✅ storage 56、core 118、desktop 266 |
-| L2 | 跨包集成 | `core + storage + testkit` 组合，真实存储适配器 + 进程内 FTP/S3/静态服务器；内存存储 + 内存 fetch 快速链路；**本机 Host 真实监听 HTTP** | `tests/integration/**` | `pnpm --filter @apphub/tests test` | ✅ 37 tests / 10 files |
+| L1 | 包单元 | storage 四个适配器 + 工厂；core 频道/发布/安装/Host 引擎；desktop 主进程 IPC/安全/数据目录；renderer React 组件 | `packages/*/src/**/*.test.ts(x)`、`apps/desktop/src/**/*.test.ts(x)` | `pnpm -r test` / 各包 `pnpm --filter <pkg> test` | ✅ storage 56、core 118、desktop 267 |
+| L2 | 跨包集成 | `core + storage + testkit` 组合，真实存储适配器 + 进程内 FTP/S3/静态服务器；内存存储 + 内存 fetch 快速链路；**本机 Host 真实监听 HTTP** | `tests/integration/**` | `pnpm --filter @apphub/tests test` | ✅ 39 tests / 11 files |
 | L3 | Electron E2E | 真实启动打包后的 Electron 应用，走完整 UI 链路（本机 Host、默认 local-host、端口避让、数据目录三来源/双 env/旧版迁移） | `apps/desktop/e2e/**` | `pnpm build && pnpm test:e2e` | ✅ 17 tests / 7 specs |
 | L4 | 手工验收 | 真实 vsftpd/FileZilla + nginx、MinIO、两台设备局域网访问、三平台 GUI、真实启动外部 App、原生文件对话框 | 本文 §11 清单 | 人工 | ⏳ 发布前逐项执行 |
 
@@ -306,8 +306,8 @@ Playwright **不需要**执行 `playwright install`：E2E 使用 Electron 自带
 | `@apphub/storage` | 5 | 56 | local/ftp-http/s3/local-host CRUD/list/stat/probe、Unicode、二进制、非法 key、工厂 |
 | `@apphub/core` | 6 | 118 | 频道生命周期、发布 files/zip（含写入顺序、冲突、幂等、同频道并发串行化）、安装/更新/回滚、Host 服务、HTTP/state/zip 工具 |
 | `@apphub/testkit` | 0 | 0 | 纯测试基础设施（`--passWithNoTests`，由集成测试间接覆盖） |
-| `@apphub/desktop` | 22 | 266 | 主进程 IPC/校验/selection/launcher/secret-box/host/数据目录（默认 AppHubData/双 env/旧版迁移/启动恢复）+ renderer RTL（视图/组件、HostPanel、向导默认 local-host/端口避让、设置页数据目录文案） |
-| `@apphub/tests`（L2） | 10 | 37 | 见 §7 |
+| `@apphub/desktop` | 22 | 267 | 主进程 IPC/校验/selection/launcher/secret-box/host/数据目录（默认 AppHubData/双 env/旧版迁移/启动恢复）+ renderer RTL（视图/组件、HostPanel、向导默认 local-host/端口避让、设置页数据目录文案、发布新版本 appId 回归） |
+| `@apphub/tests`（L2） | 11 | 39 | 见 §7 |
 
 ---
 
@@ -763,16 +763,16 @@ jobs:
 | test @apphub/storage | ✅ 56 tests | 2.7s |
 | test @apphub/core | ✅ 118 tests | 4.2s |
 | test @apphub/testkit | ✅ 无测试文件（`--passWithNoTests`，设计如此） | 1.0s |
-| test @apphub/tests（集成） | ✅ 37 tests / 10 files | 4.8s |
-| test @apphub/desktop | ✅ 266 tests / 22 files | 11.4s |
+| test @apphub/tests（集成） | ✅ 39 tests / 11 files | 4.9s |
+| test @apphub/desktop | ✅ 267 tests / 22 files | 11.5s |
 | typecheck × 6 包 | ✅ 全部通过 | 1.1~4.0s |
 | build @apphub/desktop | ✅ 产出 `out/main`、`out/preload`、`out/renderer` | 1.6s |
 | e2e @apphub/desktop | ✅ 17 tests / 7 specs | 38.7s |
 
-**自动化用例合计：504 个 Vitest 用例 + 17 个 Electron E2E 用例，0 skipped。**
+**自动化用例合计：507 个 Vitest 用例 + 17 个 Electron E2E 用例，0 skipped。**
 （Phase 7 变更：`settings-data-dir.spec.ts` 由 3 → 5 用例（新增 APPHUB_DATA_DIR、旧版自动迁移；
-env/default/custom 断言按 AppHubData 新语义更新）；desktop 单测由 255 → 266（data-dir 39 用例，
-新增默认子目录/双 env 优先级/旧版检测/目标非空跳过/move 迁移/回滚/EXDEV 等）。另：
+env/default/custom 断言按 AppHubData 新语义更新）；desktop 单测由 255 → 267（data-dir 39 用例 +
+发布新版本 appId 回归 1 个）；集成测试 37 → 39（新增 `repair-duplicate-app.test.ts` 2 个）。另：
 `pnpm test:e2e` 单独执行 17/17 通过（41.2s）。）
 
 ### 12.3 覆盖率（可选）
@@ -786,7 +786,7 @@ env/default/custom 断言按 AppHubData 新语义更新）；desktop 单测由 2
 | Functions | 92.28% |
 | Lines | 85.87% |
 
-（core 共 118 单测 + 37 集成测试共同覆盖；`host.ts` 85.16%、`publish.ts` 92.12%；`mutex.ts`/`progress.ts` 100%。）
+（core 共 118 单测 + 39 集成测试共同覆盖；`host.ts` 85.16%、`publish.ts` 92.12%；`mutex.ts`/`progress.ts` 100%。）
 
 ### 12.4 E2E 稳定性
 
@@ -794,7 +794,7 @@ env/default/custom 断言按 AppHubData 新语义更新）；desktop 单测由 2
 - 新增/更新的设置页数据目录 5 用例首次接入即通过（env 双变量/default/custom/旧版迁移）；
   旧版迁移用例真实执行 move 迁移并校验 `channels.list` 可见旧频道。
 - Phase 6 收尾修复的测试侧问题（#10 选择器作用域、#11 集成端口竞争）本轮未复现；
-  集成测试仍保持 37/37、E2E 无 flaky。
+  集成测试仍保持 39/39、E2E 无 flaky。
 - 说明：旧版迁移 E2E 采用"纯文件预置 + 一次启动"（不先跑旧版 App），比"先跑再挪"更稳定；
   Chromium 缓存/日志与 AppHubData 的隔离由 `keep-me.txt` 保留 + 路径断言间接验证。
 
@@ -931,6 +931,7 @@ env/default/custom 断言按 AppHubData 新语义更新）；desktop 单测由 2
 | 9 | 并发发布用例本身（QA 编写）在 Phase 4 未被充分压测：单次执行通过，但在 Phase 5 更高并行负载下暴露上述缺陷 | 说明"并发用例只跑一次"不足以保证并发正确性 | 保留该用例作为频道级串行化回归；后续同类并发场景建议连续多轮执行（core 回归已覆盖 5 轮） |
 | 10 | Phase 6 E2E 首次编写端口避让用例时，`getByText(/已用端口/)` 命中了底层频道卡片标题（预置频道名含"已用端口"），而非向导 hint | 2 个新 E2E 失败（测试定位问题） | 把 hint 定位限定在 `create-channel-form` 内，并断言更具体的「已自动避开已使用端口」文案；修复后 3/3 通过 |
 | 11 | Phase 6 收尾 `verify:e2e` 偶发失败：`local-host.test.ts` 公开全链路在 `host.start` 报 `CONFLICT 端口已被占用`（约 1/8 概率） | 集成测试偶发失败（测试基础设施竞争窗口，非产品缺陷） | 根因是 `getFreePort()` 关闭探测端口到 Host 真正 listen 之间的竞争窗口（并行跑 10 个集成文件时更易碰）。测试侧加 `startHostResilient`：仅对 CONFLICT 用 `updateConfig({port: 新 getFreePort()})` 重试（最多 3 次）；端口冲突用例仍显式断言 CONFLICT 不走 helper。修复后集成连跑 5 次 37/37、`verify:e2e` 连跑 3 次 PASS |
+| 12 | **v0.1.0 发布新版本的 appId 丢失**：`PublishWizard` 仅在"新建 App"时把 `appId` 放进 `PublishRequestDTO`；已有 App 发布新版本时未传原 `app.meta.appId`，主进程 `resolveAppId` 按 `displayName` 重新 `slugifyAppName`。当 `displayName` 与 `appId` 不一致（如 `cpu_z` vs `CPU-Z`）时，`channel.json` 出现两个 App（`cpu_z`/`cpu-z`） | 用户实测：发布 1.0.1 后频道多出一个 App，旧 App 停留在 1.0.0 | 已修复：`PublishWizard.buildRequest` 对已有 App 强制携带 `app.meta.appId`；新增 renderer 回归测试（`cpu_z`/`CPU-Z`）；新增 `scripts/repair-duplicate-app.ts` + 2 个集成测试，可把误生成 App 的版本并入原 App 并更新 `channel.json`（含 dry-run/备份/冲突拒绝）。历史数据修复命令见 README「修复历史重复 App」 |
 
 > Phase 5（本机 Host）Host 功能本身**未发现源码缺陷**；7 个集成用例与 3 个 E2E 用例首次接入即通过。
 > 本轮发现的 2 个问题分别属于 E2E 测试侧竞态（#7）与 core 并发写（#8，已由 core-dev 修复）。
@@ -947,7 +948,7 @@ env/default/custom 断言按 AppHubData 新语义更新）；desktop 单测由 2
 
 ## 16. 附录：自动化用例索引
 
-### 16.1 集成测试（`tests/integration`，37 用例）
+### 16.1 集成测试（`tests/integration`，39 用例）
 
 | 文件 | 用例数 | 内容摘要 |
 | --- | --- | --- |
@@ -961,6 +962,7 @@ env/default/custom 断言按 AppHubData 新语义更新）；desktop 单测由 2
 | `real-s3.test.ts` | 1 | S3 全链路（含匿名公开读） |
 | `multi-app.test.ts` | 4 | 交替发布合并；并发发布不丢 App；多频道隔离；多 App 下幂等/冲突 |
 | `local-host.test.ts` | 7 | 公开全链路（start→订阅→安装→更新 MD5 复用→stop 失败→restart→卸载）；私密能力链接/错误 accessKey 404/非管理员 publish；zip 安装；端口冲突 CONFLICT；stop 后端口复用；updateConfig（STATE/端口/advertiseHost/rootDir 不可改）；非 local-host UNSUPPORTED/NOT_FOUND |
+| `repair-duplicate-app.test.ts` | 2 | 修复历史重复 App：版本目录/元信息/channel.json 合并、备份；dry-run 不修改；版本冲突拒绝 |
 
 ### 16.2 E2E（`apps/desktop/e2e`，17 用例）
 
