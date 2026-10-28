@@ -1,6 +1,6 @@
 {
   "name": "apphub-monorepo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "AppHub - 去中心化的 App 分享、订阅与本地管理工具",
   "packageManager": "pnpm@11.22.0",
