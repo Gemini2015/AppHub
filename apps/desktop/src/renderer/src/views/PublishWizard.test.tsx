@@ -8,6 +8,7 @@ import {
   makeAppDetail,
   makeAppMeta,
   makePublishResult,
+  makeVersionEntry,
   ok,
 } from '../../test/mock-api';
 import { renderWithApi, screen, userEvent, waitFor, within } from '../../test/render';
@@ -51,6 +52,34 @@ async function pickFiles(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('发布向导', () => {
+  it('新 App 默认版本为 1.0.0', () => {
+    const api = createMockApi();
+    renderWizard(api);
+    expect(screen.getByTestId('publish-version')).toHaveValue('1.0.0');
+    expect(screen.getByText(/新 App 默认 1\.0\.0/)).toBeInTheDocument();
+  });
+
+  it('已有 App 默认按历史最高版本递增 minor（1.0.x → 1.1.0）', () => {
+    const api = createMockApi();
+    // makeAppDetail 默认含 1.0.1 与 1.0.0，取最高版本 1.0.1 → 下一个 minor 1.1.0
+    renderWizard(api, { app: makeAppDetail() });
+    expect(screen.getByTestId('publish-version')).toHaveValue('1.1.0');
+    expect(screen.getByText(/默认已按历史最高版本递增为 1\.1\.0/)).toBeInTheDocument();
+  });
+
+  it('历史最高为 1.1.0 时默认递增到 1.2.0', () => {
+    const api = createMockApi();
+    renderWizard(api, {
+      app: makeAppDetail({
+        versions: [
+          makeVersionEntry({ version: '1.1.0' }),
+          makeVersionEntry({ version: '1.0.0' }),
+        ],
+      }),
+    });
+    expect(screen.getByTestId('publish-version')).toHaveValue('1.2.0');
+  });
+
   it('必填与 semver 校验拦截在第 1 步，修正后错误消失', async () => {
     const api = createMockApi();
     const { onPublished } = renderWizard(api);

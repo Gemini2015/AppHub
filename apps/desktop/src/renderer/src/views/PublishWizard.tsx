@@ -12,6 +12,7 @@ import {
   isValidSemver,
   platformLabel,
   progressPercent,
+  suggestNextVersion,
 } from '../format';
 import type {
   ApiError,
@@ -74,6 +75,8 @@ export function PublishWizard({ channelId, channelName, app, onClose, onPublishe
   const toast = useToast();
   const isExisting = app !== null;
   const existingVersions = app?.versions ?? [];
+  /** 默认版本：新 App 1.0.0；已有 App 按历史最高版本递增 minor（1.0.x → 1.1.0）。 */
+  const defaultVersion = suggestNextVersion(existingVersions.map((item) => item.version));
 
   const [step, setStep] = useState(1);
   const [displayName, setDisplayName] = useState(app?.meta.displayName ?? '');
@@ -83,7 +86,7 @@ export function PublishWizard({ channelId, channelName, app, onClose, onPublishe
   const [homepage, setHomepage] = useState(app?.meta.homepage ?? '');
   const [publishMode, setPublishMode] = useState<PublishMode>(app?.meta.publishMode ?? 'files');
   const [platform, setPlatform] = useState<Platform>(app?.meta.platforms[0] ?? 'windows');
-  const [version, setVersion] = useState('');
+  const [version, setVersion] = useState(defaultVersion);
   const [changelog, setChangelog] = useState('');
 
   const [selection, setSelection] = useState<PublishSelectionDTO | null>(null);
@@ -536,11 +539,13 @@ export function PublishWizard({ channelId, channelName, app, onClose, onPublishe
                     clearError('version');
                   }}
                   required
-                  placeholder="例如 1.0.1"
+                  placeholder="例如 1.0.0"
                   hint={
                     versionExists
                       ? '⚠️ 该版本已存在，提交时需要确认覆盖。'
-                      : '必须符合 semver；建议递增且大于当前平台 latest。'
+                      : isExisting
+                        ? `默认已按历史最高版本递增为 ${defaultVersion}；也可以手工修改。`
+                        : `新 App 默认 ${defaultVersion}；后续版本会自动递增 minor（1.1.0、1.2.0…）。`
                   }
                   error={errors.version}
                   disabled={publishing}

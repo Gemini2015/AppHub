@@ -316,7 +316,7 @@ src/preload/index.ts         contextBridge 暴露 AppHubApi
 
 ## 9. 交付验收清单
 
-- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（550 个 Vitest 用例，0 skipped）；
+- [x] `pnpm install && pnpm typecheck && pnpm test` 全部通过（553 个 Vitest 用例，0 skipped）；
 - [x] `pnpm build` 产出 `out/`，`pnpm dev` 可启动应用；`pnpm package` 产出 `apps/desktop/release/win-unpacked/AppHub.exe`；
 - [x] 演示脚本 `pnpm demo` 在 FTP+nginx 模拟环境与本机 Host 环境下完成创建/发布/订阅/安装/更新/启停验证；
 - [x] README 的快速开始与 [SCREENSHOTS.md](./SCREENSHOTS.md) 截图一致；

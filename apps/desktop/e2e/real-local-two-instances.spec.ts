@@ -14,7 +14,7 @@ import { TESTID, TIMEOUTS, waitForShell } from './support/ui';
  * A 实例（owner）走 UI 创建 local-host 频道 → Host 自动启动 → 走 UI 发布 v1.0.0
  * （files 模式、选择文件夹、显式 appId=`twoinst` 且 displayName≠appId，覆盖 appId 回归）；
  * B 实例（subscriber，独立 userData）走 UI 订阅 Host 地址 → 安装 → 磁盘 size/MD5 校验；
- * 修改源目录后 A 从 App 详情发布 v1.0.1 → B 刷新频道 → 更新 → 磁盘校验新版本；
+ * 修改源目录后 A 从 App 详情发布 v1.1.0 → B 刷新频道 → 更新 → 磁盘校验新版本；
  * 全链路断言 channel.json 始终只有 1 个 App 且 appId 保持 `twoinst`。
  *
  * 关键实现说明：
@@ -26,7 +26,7 @@ import { TESTID, TIMEOUTS, waitForShell } from './support/ui';
  *  - 必须 files 模式；zip 双实例链路留待后续。
  */
 test.describe('双实例真实链路：A 发布 → Host → B 订阅/安装/更新', () => {
-  test('UI 创建 local-host → 发布 v1.0.0（appId=twoinst）→ 订阅安装 → 发布 v1.0.1 → 刷新更新', async ({}, testInfo) => {
+  test('UI 创建 local-host → 发布 v1.0.0（appId=twoinst）→ 订阅安装 → 默认递增发布 v1.1.0 → 刷新更新', async ({}, testInfo) => {
     await fs.mkdir(TMP_DIR, { recursive: true });
     const workDir = await fs.mkdtemp(path.join(TMP_DIR, 'real-flow-'));
     const sourceDir = path.join(workDir, 'source');
@@ -83,8 +83,11 @@ test.describe('双实例真实链路：A 发布 → Host → B 订阅/安装/更
       await owner.window.getByTestId(TESTID.publishOpenButton).click();
       await expect(owner.window.getByTestId(TESTID.publishWizard)).toBeVisible();
       await owner.window.getByTestId(TESTID.publishDisplayName).fill('Two Instance Demo');
-      await owner.window.getByTestId(TESTID.publishAppId).fill('twoinst');
-      await owner.window.getByTestId(TESTID.publishVersion).fill('1.0.0');
+      const appIdInput = owner.window.getByTestId(TESTID.publishAppId);
+      await appIdInput.fill('twoinst');
+      await expect(appIdInput).toHaveValue('twoinst');
+      // 新 App：版本号应由发布向导默认填为 1.0.0
+      await expect(owner.window.getByTestId(TESTID.publishVersion)).toHaveValue('1.0.0');
       await owner.window.getByTestId(TESTID.publishNext).click();
 
       await expect(owner.window.getByTestId(TESTID.publishPickFolder)).toBeVisible();
@@ -147,15 +150,15 @@ test.describe('双实例真实链路：A 发布 → Host → B 订阅/安装/更
         `/library/${channelId}/twoinst/versions/1.0.0`,
       );
 
-      // ---- 源目录升级为 v1.0.1 ----
+      // ---- 源目录升级为 v1.1.0 ----
       const v2Files = {
-        'TwoInst.exe': 'TwoInst v1.0.1 payload (changed)\n',
-        'resources/config.ini': '[app]\nname=Two Instance Demo\nversion=1.0.1\n',
+        'TwoInst.exe': 'TwoInst v1.1.0 payload (changed)\n',
+        'resources/config.ini': '[app]\nname=Two Instance Demo\nversion=1.1.0\n',
       };
       await writeSourceFiles(sourceDir, v2Files);
       const v2Expected = await expectedFiles(sourceDir, v2Files);
 
-      // 5) A 从 App 详情「发布新版本」→ v1.0.1（已有 App 不应出现 appId 输入）
+      // 5) A 从 App 详情「发布新版本」→ v1.1.0（已有 App 不应出现 appId 输入）
       await owner.window.getByRole('button', { name: /返回频道列表/ }).click();
       await owner.window.locator(
         `[data-testid="${TESTID.channelCard}"][data-channel-id="${channelId}"]`,
@@ -171,7 +174,8 @@ test.describe('双实例真实链路：A 发布 → Host → B 订阅/安装/更
       await expect(owner.window.getByTestId(TESTID.publishWizard)).toBeVisible();
       // 已有 App：appId 只读展示、没有可编辑的 publish-app-id 输入
       await expect(owner.window.getByTestId(TESTID.publishAppId)).toHaveCount(0);
-      await owner.window.getByTestId(TESTID.publishVersion).fill('1.0.1');
+      // 已有 App：默认版本在 1.0.0 基础上递增 minor 为 1.1.0
+      await expect(owner.window.getByTestId(TESTID.publishVersion)).toHaveValue('1.1.0');
       await owner.window.getByTestId(TESTID.publishNext).click();
       await owner.window.getByTestId(TESTID.publishPickFolder).click();
       await expect(
@@ -186,41 +190,41 @@ test.describe('双实例真实链路：A 发布 → Host → B 订阅/安装/更
       await owner.window.getByRole('button', { name: '完成' }).click();
       await expect(owner.window.getByTestId(TESTID.publishWizard)).toBeHidden();
 
-      // 6) 远端 channel.json：仍只有 1 个 App、appId 不变、latest=1.0.1
+      // 6) 远端 channel.json：仍只有 1 个 App、appId 不变、latest=1.1.0
       await expect
         .poll(async () => (await fetchChannel(channelUrl)).apps[0]?.latest.windows, {
           timeout: TIMEOUTS.op,
         })
-        .toBe('1.0.1');
+        .toBe('1.1.0');
       const channelV2 = await fetchChannel(channelUrl);
       expect(channelV2.apps).toHaveLength(1);
       expect(channelV2.apps[0]?.appId).toBe('twoinst');
-      expect(channelV2.apps[0]?.latest.windows).toBe('1.0.1');
+      expect(channelV2.apps[0]?.latest.windows).toBe('1.1.0');
 
-      // 7) B 返回频道详情 → 刷新 → 打开 App → 出现「更新」→ 更新到 v1.0.1
+      // 7) B 返回频道详情 → 刷新 → 打开 App → 出现「更新」→ 更新到 v1.1.0
       await subscriber.window.getByRole('button', { name: '返回频道详情' }).click();
       await expect(subscriber.window.getByTestId(TESTID.channelDetail)).toBeVisible();
       await subscriber.window.getByTestId(TESTID.channelRefreshButton).click();
-      // 刷新完成后频道卡片展示的 latest 应变为 1.0.1（以数据为准，不依赖按钮瞬时文案）
-      await expect(appCard).toContainText('1.0.1', { timeout: TIMEOUTS.op });
+      // 刷新完成后频道卡片展示的 latest 应变为 1.1.0（以数据为准，不依赖按钮瞬时文案）
+      await expect(appCard).toContainText('1.1.0', { timeout: TIMEOUTS.op });
       await appCard.click();
       await expect(subscriber.window.getByTestId(TESTID.appDetail)).toBeVisible();
       await expect(subscriber.window.getByTestId(TESTID.updateButton)).toBeVisible({
         timeout: TIMEOUTS.op,
       });
       await subscriber.window.getByTestId(TESTID.updateButton).click();
-      await expect(subscriber.window.getByTestId(TESTID.installStatus)).toHaveText(/已安装 v1\.0\.1/, {
+      await expect(subscriber.window.getByTestId(TESTID.installStatus)).toHaveText(/已安装 v1\.1\.0/, {
         timeout: TIMEOUTS.op,
       });
 
       const installedV2 = await waitForInstalledVersion(subscriber.userDataDir, {
         channelId: channelId!,
         appId: 'twoinst',
-        version: '1.0.1',
+        version: '1.1.0',
         entry: 'TwoInst.exe',
         files: v2Expected,
       });
-      expect(installedV2.versionDir.replace(/\\/g, '/')).toContain('/versions/1.0.1');
+      expect(installedV2.versionDir.replace(/\\/g, '/')).toContain('/versions/1.1.0');
 
       // 8) B 本地库只有 twoinst
       await subscriber.window.getByTestId(TESTID.navLibrary).click();

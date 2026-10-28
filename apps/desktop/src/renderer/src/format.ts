@@ -205,6 +205,29 @@ export function compareSemver(a: string, b: string): number {
   return 0;
 }
 
+/**
+ * 发布向导的默认版本号：
+ *  - 新 App：1.0.0；
+ *  - 已有 App：取历史最高版本，递增 minor 并清零 patch（1.0.x → 1.1.0、1.1.0 → 1.2.0）。
+ *
+ * 这里只影响输入框初始值，用户仍可手工修改为任意合法 semver。
+ */
+export function suggestNextVersion(versions: readonly string[] = []): string {
+  const valid = versions.map((value) => value.trim()).filter((value) => isValidSemver(value));
+  if (valid.length === 0) return '1.0.0';
+  const latest = valid.reduce((current, candidate) =>
+    compareSemver(candidate, current) > 0 ? candidate : current,
+  );
+  const match = /^(\d+)\.(\d+)\./.exec(latest);
+  if (!match) return '1.0.0';
+  const major = Number.parseInt(match[1]!, 10);
+  const minor = Number.parseInt(match[2]!, 10);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor) || minor >= Number.MAX_SAFE_INTEGER) {
+    return '1.0.0';
+  }
+  return `${major}.${minor + 1}.0`;
+}
+
 /** latest 是否比 current 新。 */
 export function isNewerVersion(latest: string | undefined | null, current: string | undefined | null): boolean {
   if (!latest || !current) return false;

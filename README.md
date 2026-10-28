@@ -53,7 +53,7 @@ pnpm demo            # 无需 GUI 的全链路演示
 ## 质量状态
 
 - `pnpm verify:e2e`：**14/14 步通过**（Windows + Linux CI）；
-- Vitest：**550 个用例，0 skipped**；Electron E2E：**19/19 通过**；
+- Vitest：**553 个用例，0 skipped**；Electron E2E：**19/19 通过**；
 - 测试策略、覆盖矩阵与手工验收清单见 [docs/TESTING.md](docs/TESTING.md)。
 
 ## License

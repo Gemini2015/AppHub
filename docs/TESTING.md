@@ -40,7 +40,7 @@ pnpm build && pnpm test:e2e
 | 层 | 名称 | 范围 | 位置 | 运行方式 | 当前状态 |
 | --- | --- | --- | --- | --- | --- |
 | L0 | 协议单元 | zod schema、路径/URL/semver/错误码/序列化 | `packages/protocol/src/*.test.ts` | `pnpm --filter @apphub/protocol test` | ✅ 27 tests |
-| L1 | 包单元 | storage 四个适配器 + 工厂；core 频道/发布/安装/Host 引擎；desktop 主进程 IPC/安全/数据目录/自动更新；renderer React 组件 | `packages/*/src/**/*.test.ts(x)`、`apps/desktop/src/**/*.test.ts(x)` | `pnpm -r test` / 各包 `pnpm --filter <pkg> test` | ✅ storage 56、core 123、desktop 305 |
+| L1 | 包单元 | storage 四个适配器 + 工厂；core 频道/发布/安装/Host 引擎；desktop 主进程 IPC/安全/数据目录/自动更新；renderer React 组件 | `packages/*/src/**/*.test.ts(x)`、`apps/desktop/src/**/*.test.ts(x)` | `pnpm -r test` / 各包 `pnpm --filter <pkg> test` | ✅ storage 56、core 123、desktop 308 |
 | L2 | 跨包集成 | `core + storage + testkit` 组合，真实存储适配器 + 进程内 FTP/S3/静态服务器；内存存储 + 内存 fetch 快速链路；**本机 Host 真实监听 HTTP**；repair 工具 | `tests/integration/**` | `pnpm --filter @apphub/tests test` | ✅ 39 tests / 11 files |
 | L3 | Electron E2E | 真实启动打包后的 Electron 应用，走完整 UI 链路（本机 Host、默认 local-host、端口避让、数据目录三来源/双 env/旧版迁移、双实例真实链路、**自动更新 unsupported 态**） | `apps/desktop/e2e/**` | `pnpm build && pnpm test:e2e` | ✅ 19 tests / 8 specs |
 | L4 | 手工验收 | 真实 vsftpd/FileZilla + nginx、MinIO、两台设备局域网访问、三平台 GUI、真实启动外部 App、原生文件对话框 | 本文 §11 清单 | 人工 | ⏳ 发布前逐项执行 |
@@ -334,7 +334,7 @@ Playwright **不需要**执行 `playwright install`：E2E 使用 Electron 自带
 | `@apphub/storage` | 5 | 56 | local/ftp-http/s3/local-host CRUD/list/stat/probe、Unicode、二进制、非法 key、工厂 |
 | `@apphub/core` | 6 | 123 | 频道生命周期、发布 files/zip（含写入顺序、冲突、幂等、同频道并发串行化）、安装/更新/回滚（Windows rename 重试/复制兜底）、Host 服务、HTTP/state/zip 工具 |
 | `@apphub/testkit` | 0 | 0 | 纯测试基础设施（`--passWithNoTests`，由集成测试间接覆盖） |
-| `@apphub/desktop` | 26 | 305 | 主进程 IPC/校验/selection（含 E2E pick 注入）/launcher/secret-box/host/数据目录/自动更新状态机 + renderer RTL（视图/组件、HostPanel、向导默认 local-host/端口避让、发布新版本 appId 回归、设置页数据目录文案、**自动更新 Banner/弹窗/设置卡片 16 个**） |
+| `@apphub/desktop` | 26 | 308 | 主进程 IPC/校验/selection（含 E2E pick 注入）/launcher/secret-box/host/数据目录/自动更新状态机 + renderer RTL（视图/组件、HostPanel、向导默认 local-host/端口避让/版本号默认递增、发布新版本 appId 回归、设置页数据目录文案、自动更新 Banner/弹窗/设置卡片 16 个） |
 | `@apphub/tests`（L2） | 11 | 39 | 见 §7 |
 
 ---
@@ -865,16 +865,16 @@ Get-Content apps/desktop/release/win-unpacked/resources/app-update.yml
 | test @apphub/core | ✅ 123 tests | 4.3s |
 | test @apphub/testkit | ✅ 无测试文件（`--passWithNoTests`，设计如此） | 1.0s |
 | test @apphub/tests（集成） | ✅ 39 tests / 11 files | 6.2s |
-| test @apphub/desktop | ✅ **305 tests / 26 files** | 11.9s |
+| test @apphub/desktop | ✅ **308 tests / 26 files** | 12.1s |
 | typecheck × 6 包 | ✅ 全部通过 | 1.1~4.1s |
 | build @apphub/desktop | ✅ 产出 `out/main`、`out/preload`、`out/renderer` | 1.7s |
 | e2e @apphub/desktop | ✅ **19 tests / 8 specs** | 52.5s |
 
-**自动化用例合计：550 个 Vitest 用例 + 19 个 Electron E2E 用例，0 skipped。**
+**自动化用例合计：553 个 Vitest 用例 + 19 个 Electron E2E 用例，0 skipped。**
 （Phase 10 变更：`updater.ts` + `electron-updater-adapter.ts` + main `updater.test.ts`（12）+
-ipc updates handler 测试（4）；renderer 新增自动更新 Banner/弹窗/设置卡片 16 个测试（renderer 87 tests）；
-E2E 新增 `smoke.spec.ts` 自动更新 unsupported 态断言（1）。desktop 273 → 305（22 → 26 files）。
-`pnpm test:e2e` 单独执行 19/19 通过（51.3s）。）
+ipc updates handler 测试（4）；renderer 新增自动更新 Banner/弹窗/设置卡片 16 个 + 发布版本号默认递增 3 个测试（renderer 90 tests）；
+E2E 新增 `smoke.spec.ts` 自动更新 unsupported 态断言（1）与双实例默认版本递增链路。desktop 273 → 308（22 → 26 files）。
+`pnpm test:e2e` 单独执行 19/19 通过。）
 
 ### 12.3 覆盖率（可选）
 
